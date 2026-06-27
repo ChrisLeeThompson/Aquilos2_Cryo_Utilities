@@ -1,0 +1,4 @@
+module Js
+MillingAngleCalculations 1.0 millingAngleCalculations.js
+DiagramFunctions 1.0 diagramFunctions.js
+ChartFunctions 1.0 chartFunctions.js
