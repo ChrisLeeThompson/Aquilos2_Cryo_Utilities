@@ -56,6 +56,11 @@ logger = logging.getLogger(__name__)
 # it is None in headless / test contexts.
 SampleCallback = Callable[[float, float], None]
 
+# VacuumState value (str) reported by the chamber once it has settled at
+# the commanded vacuum. Matches both the real ``VacuumState.PUMPED`` enum
+# (stringified) and ``SimulatedVacuumOps.chamber_state``.
+_CHAMBER_STATE_PUMPED = "Pumped"
+
 
 class ArgonPurgeService(ActivityService):
     """Argon-purge the chamber through a cycled pressure sequence."""
@@ -78,6 +83,9 @@ class ArgonPurgeService(ActivityService):
         self._on_sample = on_sample
         # Set at run() entry; the x-axis origin for emitted samples.
         self._t0 = 0.0
+        # One-way latch: chart samples are suppressed until the chamber has
+        # reached low (sputter) vacuum (see _emit_sample). Reset per run.
+        self._chart_gate_open = False
 
     def run(
         self,
@@ -96,6 +104,9 @@ class ArgonPurgeService(ActivityService):
         # can't perturb the timeline, matching the runner's duration
         # measurement.
         self._t0 = time.monotonic()
+        # Re-arm the chart gate for this run: suppress samples until the
+        # chamber first reaches low (sputter) vacuum.
+        self._chart_gate_open = False
 
         high_pa = defaults.ARGON_PURGE_HIGH_PRESSURE_PA
         mid_pa = defaults.ARGON_PURGE_MID_PRESSURE_PA
@@ -203,18 +214,42 @@ class ArgonPurgeService(ActivityService):
     def _emit_sample(self, pressure: float) -> None:
         """Forward one (elapsed_s, pressure_pa) reading to the chart sink.
 
+        Gated: samples are suppressed until the chamber has reached low
+        (sputter) vacuum, so the chart shows the argon cycling rather than
+        the initial high-vacuum climb. The gate opens once the chamber
+        reports ``"Pumped"`` *and* the pressure has risen above
+        :data:`defaults.ARGON_PURGE_CHART_GATE_MIN_PA` (the pressure term
+        rejects the chamber's at-rest "Pumped" state at run start); once
+        open it stays open for the rest of the run.
+
         No-op when no sink is wired (headless / tests). Guarded: a
-        misbehaving sink must never abort a vacuum poll — telemetry is
-        strictly best-effort.
+        misbehaving sink — or a chamber-state read — must never abort a
+        vacuum poll; telemetry is strictly best-effort.
         """
         if self._on_sample is None:
             return
         try:
+            if not self._chart_gate_open:
+                if not self._chamber_at_sputter_vacuum(pressure):
+                    return
+                self._chart_gate_open = True
             self._on_sample(time.monotonic() - self._t0, float(pressure))
         except Exception:
             logger.exception(
                 "Argon Purge: chart sample sink raised (non-fatal)"
             )
+
+    def _chamber_at_sputter_vacuum(self, pressure: float) -> bool:
+        """True once the chamber has reached low (sputter) vacuum.
+
+        Gate condition for the live chart: the chamber reports it is
+        ``"Pumped"`` and the pressure has climbed out of high vacuum into
+        the argon regime (above the gate threshold).
+        """
+        return (
+            self._vacuum.chamber_state == _CHAMBER_STATE_PUMPED
+            and float(pressure) >= defaults.ARGON_PURGE_CHART_GATE_MIN_PA
+        )
 
     def _monitor_window(
         self,

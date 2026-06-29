@@ -150,8 +150,19 @@ QtObject {
     readonly property color pressureChartTraceColorActive: universalAccent
     readonly property color pressureChartTraceColorInactive: Qt.darker(pressureChartTraceColorActive, 1.8)
     readonly property int pressureChartHeight: 180
-    readonly property real pressureChartYFloorPa: 30.0
-    readonly property real pressureChartXFloorS: 60.0
+    // Both axes auto-range to the data (see PressureChart._rescale). These
+    // are the minimum spans the auto-range will not shrink below, so an
+    // empty / single-sample / flat trace can't collapse the axis to zero.
+    readonly property real pressureChartYMinSpanPa: 5.0
+    readonly property real pressureChartXMinSpanS: 10.0
+    // Fractional headroom added to each end of the auto-ranged axes so the
+    // trace doesn't sit flush against the spines (0.05 = 5% of the data
+    // span each side). Raise pressureChartYPad to leave more space between
+    // a low trace and the x-axis; set to 0 to fit flush.
+    readonly property real pressureChartYPad: 0.05
+    readonly property real pressureChartXPad: 0.05
+    // Target number of tick intervals per axis (the actual count lands on
+    // the nearest "nice" step, so it may differ slightly).
     readonly property int pressureChartTickCount: 4
     readonly property real pressureChartTickLength: 4
     readonly property int pressureChartTickFontPx: 12

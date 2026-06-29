@@ -75,8 +75,8 @@ ZERO_TILT_BEFORE_GIS_DEPOSITION: bool = True
 # count and the post-run chamber recovery; the pressure setpoints and
 # poll windows are fixed (they define the procedure) and mirror v2.5.
 
-ARGON_PURGE_CYCLES_DEFAULT: int = 0
-ARGON_PURGE_CYCLES_MIN: int = 0
+ARGON_PURGE_CYCLES_DEFAULT: int = 2
+ARGON_PURGE_CYCLES_MIN: int = 1
 ARGON_PURGE_CYCLES_MAX: int = 20
 ARGON_PURGE_CHAMBER_RECOVERY_DEFAULT_S: int = 120
 
@@ -95,6 +95,13 @@ ARGON_PURGE_MID_TOLERANCE_HI_PA: float = 15.5
 ARGON_PURGE_MID_MAX_POLLS: int = 300
 ARGON_PURGE_LOW_PRESSURE_PA: float = 10.0
 ARGON_PURGE_LOW_PRESSURE_POLLS: int = 30
+# The live chart suppresses samples until the chamber has actually reached
+# low (sputter) vacuum, so the trace isn't dominated by the initial
+# high-vacuum climb. A sample is charted only once the chamber reports
+# "Pumped" AND the pressure has risen above this threshold — well above
+# high vacuum (~1e-3 Pa), below every setpoint (10/15/30 Pa) — which rules
+# out the chamber's at-rest "Pumped" state at run start.
+ARGON_PURGE_CHART_GATE_MIN_PA: float = 5.0
 
 # --- GIS Purge ---
 GIS_PURGE_DURATION_S: int = 120

@@ -117,6 +117,26 @@ class MicroscopeClient:
         self._connected = True
         logger.info("Connected to microscope at %s", self._host)
 
+        # Use RAW (encoder) stage coordinates by default, not AutoScript's
+        # default "Specimen" frame. Specimen Z is tied to the free working
+        # distance (and its axis flips with link state), so saved stage
+        # positions in that frame drift in Z; RAW always returns the stage
+        # to the exact same physical position. Best-effort: a failure here
+        # must not abort the connection (which would fall back to
+        # simulation) — log it and proceed on the legacy behavior.
+        try:
+            from autoscript_sdb_microscope_client.enumerations import (
+                CoordinateSystem,
+            )
+
+            self.stage.set_default_coordinate_system(CoordinateSystem.RAW)
+        except Exception:
+            logger.warning(
+                "Could not set the stage default coordinate system to RAW; "
+                "saved positions may drift in Z (legacy Specimen behavior). ",
+                exc_info=True,
+            )
+
     def disconnect(self) -> None:
         if not self._connected:
             return

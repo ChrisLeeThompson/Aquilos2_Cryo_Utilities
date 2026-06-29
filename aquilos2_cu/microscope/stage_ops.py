@@ -146,6 +146,22 @@ class StageOps:
         )
         self._sdb.specimen.stage.relative_move(position, settings)
 
+    def set_default_coordinate_system(self, coordinate_system: Any) -> None:
+        """Set the stage's default coordinate system for reads and moves.
+
+        Applies to ``current_position`` and to ``absolute_move`` /
+        ``relative_move`` whenever a position doesn't specify its own
+        ``coordinate_system``. The app sets this to ``CoordinateSystem.RAW``
+        once at connect (see :meth:`MicroscopeClient.connect`) so saved
+        stage positions are encoder-based and exactly repeatable, rather
+        than in the AutoScript default ("Specimen") frame, whose Z is tied
+        to the free working distance and so drifts with focus / link state.
+        """
+        logger.info(
+            "Stage: set default coordinate system to %r", coordinate_system
+        )
+        self._sdb.specimen.stage.set_default_coordinate_system(coordinate_system)
+
     def home(self) -> None:
         logger.info("Stage home: starting")
         self._sdb.specimen.stage.home()
@@ -411,6 +427,19 @@ class SimulatedStageOps:
         )
         time.sleep(_SIM_RELATIVE_MOVE_DELAY_S)
         self._position = new_position
+
+    def set_default_coordinate_system(self, coordinate_system: Any) -> None:
+        """Sim no-op (kept for StageOpsLike parity).
+
+        The simulation is coordinate-only and doesn't model the
+        free-working-distance link, so RAW vs Specimen makes no difference
+        — saved positions already round-trip exactly. Accepted so the
+        connect path can call it symmetrically on either facade.
+        """
+        logger.info(
+            "Simulated stage: set default coordinate system to %r (no-op)",
+            coordinate_system,
+        )
 
     def home(self) -> None:
         logger.info("Simulated stage: home() — resetting to initial position")

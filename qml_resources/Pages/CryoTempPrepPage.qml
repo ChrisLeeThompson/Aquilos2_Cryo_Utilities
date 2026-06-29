@@ -252,8 +252,12 @@ Item {
                 ignoreUnknownSignals: true
 
                 function onWorkflowStarted() {
-                    homeStageContainer.activityState = "idle"
-                    homeStageContainer.statusMessage = ""
+                    // Only reset if Home Stage is about to run; a completed,
+                    // auto-disabled Home Stage keeps its badge until re-armed.
+                    if (homeStageContainer.switchChecked) {
+                        homeStageContainer.activityState = "idle"
+                        homeStageContainer.statusMessage = ""
+                    }
                 }
 
                 function onActivityStatusChanged(activity_id, instance_id, status) {
@@ -266,6 +270,10 @@ Item {
                     // pull data on demand, single source of truth for
                     // the duration format via formatDuration).
                     if (status === "complete") {
+                        // Auto-disable on success (see the per-activity
+                        // delegate handler above for the full rationale).
+                        homeStageContainer.switchChecked = false
+                        appController.cpWorkflow.set_home_stage_enabled(false)
                         const dur = appController.cpWorkflow.activityDuration(
                             activity_id, instance_id,
                         )
@@ -303,6 +311,12 @@ Item {
                 onToggled: function(enabled) {
                     if (appController.cpWorkflow) {
                         appController.cpWorkflow.set_home_stage_enabled(enabled)
+                    }
+                    // Re-arming clears the "complete" badge (see the
+                    // per-activity delegate handler for rationale).
+                    if (enabled) {
+                        homeStageContainer.activityState = "idle"
+                        homeStageContainer.statusMessage = ""
                     }
                 }
             }
@@ -389,8 +403,14 @@ Item {
                 ignoreUnknownSignals: true
 
                 function onWorkflowStarted() {
-                    activityContainer.activityState = "idle"
-                    activityContainer.statusMessage = ""
+                    // Only wipe the slate for activities that are about to
+                    // run (switched on). Completed activities that auto-
+                    // disabled keep their "complete" badge until the user
+                    // re-arms them by toggling the switch back on.
+                    if (activityContainer.switchChecked) {
+                        activityContainer.activityState = "idle"
+                        activityContainer.statusMessage = ""
+                    }
                 }
 
                 function onActivityStatusChanged(activity_id, instance_id, status) {
@@ -408,6 +428,16 @@ Item {
                     // validation time (no run, no duration) or runs
                     // and lands here.
                     if (status === "complete") {
+                        // Auto-disable on success so a completed activity
+                        // doesn't re-run on the next Start; the "complete"
+                        // badge stays until the user re-arms it (onToggled).
+                        // Setting switchChecked here does not emit the
+                        // container's toggled signal, so we push the
+                        // enabled-state change to Python explicitly.
+                        activityContainer.switchChecked = false
+                        appController.cpWorkflow.set_activity_enabled(
+                            delegateRoot.instanceId, false,
+                        )
                         const dur = appController.cpWorkflow.activityDuration(
                             activity_id, instance_id,
                         )
@@ -540,6 +570,12 @@ Item {
                             appController.cpWorkflow.set_activity_enabled(
                                 delegateRoot.instanceId, enabled
                             )
+                        }
+                        // Re-arming a completed activity clears its
+                        // "complete" badge so it reads as idle/ready again.
+                        if (enabled) {
+                            activityContainer.activityState = "idle"
+                            activityContainer.statusMessage = ""
                         }
                     }
 

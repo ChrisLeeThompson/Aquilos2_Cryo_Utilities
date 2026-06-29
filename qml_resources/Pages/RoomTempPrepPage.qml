@@ -71,18 +71,24 @@ Item {
 
         function onWorkflowStarted() {
             // Reset activity containers to "idle" at the start of each
-            // workflow run. We let containers keep their final state
-            // after the previous run ends so the user can see what
-            // happened — but at the moment a new run begins, the slate
-            // is wiped clean. ``statusMessage`` is also cleared so a
-            // stale tooltip from the previous run doesn't briefly
-            // surface on the new run's idle icon.
-            argonPurgeActivityContainer.activityState = "idle"
-            argonPurgeActivityContainer.statusMessage = ""
-            gisPurgeActivityContainer.activityState = "idle"
-            gisPurgeActivityContainer.statusMessage = ""
-            homeStageActivityContainer.activityState = "idle"
-            homeStageActivityContainer.statusMessage = ""
+            // workflow run — but only those about to run (switched on).
+            // A completed activity that auto-disabled keeps its "complete"
+            // badge until the user re-arms it (its onToggled clears it),
+            // so it isn't wiped here. ``statusMessage`` is also cleared so
+            // a stale tooltip from the previous run doesn't briefly surface
+            // on the new run's idle icon.
+            if (argonPurgeActivityContainer.switchChecked) {
+                argonPurgeActivityContainer.activityState = "idle"
+                argonPurgeActivityContainer.statusMessage = ""
+            }
+            if (gisPurgeActivityContainer.switchChecked) {
+                gisPurgeActivityContainer.activityState = "idle"
+                gisPurgeActivityContainer.statusMessage = ""
+            }
+            if (homeStageActivityContainer.switchChecked) {
+                homeStageActivityContainer.activityState = "idle"
+                homeStageActivityContainer.statusMessage = ""
+            }
         }
 
         function onActivityStatusChanged(activity_id, instance_id, status) {
@@ -105,6 +111,21 @@ Item {
             container.activityState = status
 
             if (status === "complete") {
+                // Auto-disable on success so a completed activity doesn't
+                // re-run on the next Start; the "complete" badge stays
+                // until the user re-arms it (the container's onToggled).
+                // Setting switchChecked here does not emit the container's
+                // toggled signal, so push the enabled-state change to the
+                // workflow explicitly via its matching Property.
+                container.switchChecked = false
+                if (activity_id === "argon_purge") {
+                    appController.rtWorkflow.argonPurgeEnabled = false
+                } else if (activity_id === "gis_purge") {
+                    appController.rtWorkflow.gisPurgeEnabled = false
+                } else if (activity_id === "home_stage") {
+                    appController.rtWorkflow.homeStageEnabled = false
+                }
+
                 // Tooltip: "Total duration: M min S s". The "Total"
                 // qualifier disambiguates from per-step parameter
                 // durations the user typed into spinboxes (purge
@@ -192,6 +213,12 @@ Item {
                     if (appController.rtWorkflow) {
                         appController.rtWorkflow.argonPurgeEnabled = enabled
                     }
+                    // Re-arming a completed activity clears its "complete"
+                    // badge so it reads as idle/ready again.
+                    if (enabled) {
+                        argonPurgeActivityContainer.activityState = "idle"
+                        argonPurgeActivityContainer.statusMessage = ""
+                    }
                 }
 
                 ArgonPurge {
@@ -238,6 +265,12 @@ Item {
                     if (appController.rtWorkflow) {
                         appController.rtWorkflow.gisPurgeEnabled = enabled
                     }
+                    // Re-arming a completed activity clears its "complete"
+                    // badge so it reads as idle/ready again.
+                    if (enabled) {
+                        gisPurgeActivityContainer.activityState = "idle"
+                        gisPurgeActivityContainer.statusMessage = ""
+                    }
                 }
 
                 GISPurge {
@@ -266,6 +299,12 @@ Item {
                 onToggled: function(enabled) {
                     if (appController.rtWorkflow) {
                         appController.rtWorkflow.homeStageEnabled = enabled
+                    }
+                    // Re-arming a completed activity clears its "complete"
+                    // badge so it reads as idle/ready again.
+                    if (enabled) {
+                        homeStageActivityContainer.activityState = "idle"
+                        homeStageActivityContainer.statusMessage = ""
                     }
                 }
 
