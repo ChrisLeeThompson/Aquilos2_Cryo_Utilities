@@ -678,7 +678,7 @@ Item {
         }
 
         Label {
-            visible: !appController.settings.compactMode
+            visible: !UiState.compact
             text: "Activities intended to be used when the stage is at cryo "
                 + "temperatures. Activities begin from the top of the list. "
                 + "Drag the handle on the left of an activity to reorder it."
@@ -688,7 +688,7 @@ Item {
         }
 
         Item {
-            Layout.preferredHeight: appController.settings.compactMode
+            Layout.preferredHeight: UiState.compact
                                     ? 0 : AppConfig.pageHeadingSpacerHeight
         }
 
