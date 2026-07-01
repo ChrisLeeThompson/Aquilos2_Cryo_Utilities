@@ -132,10 +132,10 @@ class StagePositionWithinSafeRangeCheck(PreStartCheck):
     ------------------
     The comparison is inclusive ``<=`` (see
     :func:`is_within_safe_range`). A position sitting exactly
-    at the limit (radial = 5 mm with a 5 mm range) passes — the
+    at the limit (radial = 8 mm with an 8 mm range) passes — the
     safe range is inclusive of its endpoint. This is consistent
     with how the user reads the threshold in
-    :mod:`aquilos2_cu.defaults` ("5 mm" includes the endpoint)
+    :mod:`aquilos2_cu.defaults` ("8 mm" includes the endpoint)
     and avoids floating-point misery at the boundary.
     """
 

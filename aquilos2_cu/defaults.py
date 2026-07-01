@@ -275,7 +275,7 @@ STAGE_SAFE_RANGE_POLL_INTERVAL_S: float = 0.5
 # correlate with concern. The snapshot still carries
 # ``stage_t_rad`` for future checks that may need it.
 
-STAGE_SAFE_RADIAL_RANGE_M: float = 5e-3   # 5 mm from chamber center
+STAGE_SAFE_RADIAL_RANGE_M: float = 8e-3   # 8 mm from chamber center
 
 
 # =========================================================================
@@ -323,5 +323,9 @@ DEV_FORCE_STAGE_OUT_OF_RANGE: bool = False
 # Radial distance (metres) used to seed the stage position when
 # DEV_FORCE_STAGE_OUT_OF_RANGE is set. Chosen comfortably past
 # STAGE_SAFE_RADIAL_RANGE_M so the check trips unambiguously; the value
-# also shows up in the dialog text ("6.0 mm from chamber center").
-DEV_FORCED_OUT_OF_RANGE_RADIAL_M: float = 6e-3
+# also shows up in the dialog text ("9.0 mm from center (0, 0)"). Keep
+# this at least ~1 mm beyond STAGE_SAFE_RADIAL_RANGE_M whenever that
+# limit changes, or DEV_FORCE_STAGE_OUT_OF_RANGE stops seeding an
+# out-of-range position and the ASK_CONFIRM path can no longer be
+# exercised in simulation.
+DEV_FORCED_OUT_OF_RANGE_RADIAL_M: float = 9e-3

@@ -72,8 +72,9 @@ class PreStartCheckResult:
         title: Short user-facing label (e.g. ``"Stage position out
             of range"``). Used as the bold header in the dialog's
             bulleted list. Empty for PASS results.
-        message: Longer detail line (e.g. ``"X: 8.0 mm (safe range
-            ±5.0 mm)"``). Empty for PASS results.
+        message: Longer detail line (e.g. ``"Stage is 9.0 mm from
+            center (0, 0). Safe range: within 8 mm."``). Empty for
+            PASS results.
         check_type: The :class:`PreStartCheck` subclass that
             produced this result. Populated by the orchestrator
             (not by the check itself) so callers can correlate
