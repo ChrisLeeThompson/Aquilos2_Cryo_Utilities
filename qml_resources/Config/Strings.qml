@@ -114,6 +114,7 @@ QtObject {
 
         // Settings
     readonly property string alwaysOnTopLabelTooltip: "Keep the UI window above all other applications."
+    readonly property string compactModeLabelTooltip: "Hide page subtitles and shrink the window to the Stage / Scan page's compact size. The window can still be resized."
     readonly property string gisGasPortNameLabelTooltip: "The name of the GIS gas port used in the GIS Purge and GIS Deposition activities."
     readonly property string zeroTiltBeforeGisDepositionLabelTooltip: "The stage is tilted to 0° before moving to the GIS deposition position."
     readonly property string moveStageToOriginalPositionLabelTooltip: "Move the stage to its original position after all RT Prep or Cryo Prep activites have successfully completed."

@@ -171,6 +171,7 @@ Item {
 
         Label {
 
+            visible: !appController.settings.compactMode
             text: "Activities for preparing the Aquilos 2 for cryo applications. "
                 + "These are intended to be used when the stage is at room temperature. "
                 + "Activities begin from the top of the list."
@@ -180,7 +181,10 @@ Item {
 
         }
 
-        Item { Layout.preferredHeight: AppConfig.pageHeadingSpacerHeight }
+        Item {
+            Layout.preferredHeight: appController.settings.compactMode
+                                    ? 0 : AppConfig.pageHeadingSpacerHeight
+        }
 
         // --- Activity block ---
         ColumnLayout {
