@@ -25,6 +25,7 @@ htmlcov/
 # ---- IDE / OS ----
 .vscode/
 .idea/
+.qtcreator/
 *.swp
 Thumbs.db
 Desktop.ini
