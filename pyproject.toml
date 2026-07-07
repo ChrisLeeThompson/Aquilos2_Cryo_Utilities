@@ -8,7 +8,7 @@ dependencies = [
 
 [tool.pyside6-project]
 files = [
-    "aquilos2_cryo_utilities_3.0.py",
+    "aquilos2_cryo_utilities.py",
     "qml_resources/Components/ActivityContainer.qml",
     "qml_resources/Components/ArgonPurge.qml",
     "qml_resources/Components/CustomSpinBox.qml",

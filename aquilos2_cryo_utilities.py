@@ -1,6 +1,6 @@
 # This Python file uses the following encoding: utf-8
 """
-Aquilos 2 Cryo Utilities 3.0
+Aquilos 2 Cryo Utilities
 .
 A PySide6/QML desktop UI for the Thermo Scientific Aquilos 2 microscope
 (AutoScript >= 4.13). Run this file to launch; pass ``--simulation`` to
