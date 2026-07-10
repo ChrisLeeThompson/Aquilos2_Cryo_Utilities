@@ -105,12 +105,50 @@ Item {
 
                 }
 
-                // ---- Row 1: GIS Gas Port Name ----
+                // ---- Row 1: Compact Mode ----
+                //
+                // Session-only (nothing persisted), so this doesn't touch
+                // appController.settings. The checkbox is a live mirror of
+                // UiState.compact — the explicit Binding element survives
+                // user clicks, where an inline `checked:` binding would be
+                // destroyed by the first click. onToggled fires only on user
+                // interaction (never on the Binding's programmatic writes),
+                // so drag-driven compact changes can't re-emit resize
+                // requests: toggle -> resize -> compact flip -> checked
+                // re-assert converges in one pass.
+
+                ToolTippedLabel {
+
+                    id: compactModeLabel
+                    Layout.row: 1
+                    Layout.column: 0
+                    text: "Compact Mode"
+                    toolTipText: Strings.compactModeLabelTooltip
+
+                }
+
+                CheckBox {
+
+                    id: compactModeCheckBox
+                    Layout.row: 1
+                    Layout.column: 1
+                    Layout.alignment: Qt.AlignRight
+                    onToggled: UiState.compactRequested(checked)
+
+                    Binding {
+                        target: compactModeCheckBox
+                        property: "checked"
+                        value: UiState.compact
+                    }
+
+                }
+
+                // ---- Row 2: GIS Gas Port Name ----
 
                 ToolTippedLabel {
 
                     id: gisGasPortNameLabel
-                    Layout.row: 1
+                    Layout.row: 2
                     Layout.column: 0
                     text: "GIS Gas Port Name"
                     toolTipText: Strings.gisGasPortNameLabelTooltip
@@ -120,7 +158,7 @@ Item {
                 TextField {
 
                     id: gisGasPortNameTextEdit
-                    Layout.row: 1
+                    Layout.row: 2
                     Layout.column: 1
                     Layout.preferredWidth: 120
                     Layout.alignment: Qt.AlignRight
@@ -135,7 +173,7 @@ Item {
 
                 }
 
-                // ---- Row 2: Zero Tilt Before GIS Deposition ----
+                // ---- Row 3: Zero Tilt Before GIS Deposition ----
                 //
                 // When checked, each GIS Deposition activity tilts the stage
                 // to zero degrees before moving to its deposition position,
@@ -147,7 +185,7 @@ Item {
                 ToolTippedLabel {
 
                     id: zeroTiltBeforeGisDepositionLabel
-                    Layout.row: 2
+                    Layout.row: 3
                     Layout.column: 0
                     text: "Zero Tilt Before GIS Deposition"
                     toolTipText: Strings.zeroTiltBeforeGisDepositionLabelTooltip
@@ -156,7 +194,7 @@ Item {
                 CheckBox {
 
                     id: zeroTiltBeforeGisDepositionCheckBox
-                    Layout.row: 2
+                    Layout.row: 3
                     Layout.column: 1
                     Layout.alignment: Qt.AlignRight
                     enabled: !appController.anyWorkflowRunning
@@ -165,12 +203,12 @@ Item {
 
                 }
 
-                // ---- Row 3: Move Stage To Original Position ----
+                // ---- Row 4: Move Stage To Original Position ----
 
                 ToolTippedLabel {
 
                     id: moveStageToOriginalPositionLabel
-                    Layout.row: 3
+                    Layout.row: 4
                     Layout.column: 0
                     text: "Move Stage To Original Position"
                     toolTipText: Strings.moveStageToOriginalPositionLabelTooltip
@@ -179,7 +217,7 @@ Item {
                 CheckBox {
 
                     id: moveStageToOriginalPositionCheckBox
-                    Layout.row: 3
+                    Layout.row: 4
                     Layout.column: 1
                     Layout.alignment: Qt.AlignRight
                     enabled: !appController.anyWorkflowRunning
@@ -188,12 +226,12 @@ Item {
 
                 }
 
-                // ---- Row 4: Reset Parameters For RT Prep Page ----
+                // ---- Row 5: Reset Parameters For RT Prep Page ----
 
                 ToolTippedLabel {
 
                     id: resetRTPrepParametersLabel
-                    Layout.row: 4
+                    Layout.row: 5
                     Layout.column: 0
                     text: "Reset RT Prep Parameters"
                     toolTipText: Strings.resetRTPrepParametersLabelTooltip
@@ -203,7 +241,7 @@ Item {
                 RoundButton {
 
                     id: resetRTPrepParametersButton
-                    Layout.row: 4
+                    Layout.row: 5
                     Layout.column: 1
                     Layout.alignment: Qt.AlignRight
                     text: "Reset RT Prep Parameters"
@@ -232,12 +270,12 @@ Item {
 
                 }
 
-                // ---- Row 5: Reset Parameters For Cryo Prep Page ----
+                // ---- Row 6: Reset Parameters For Cryo Prep Page ----
 
                 ToolTippedLabel {
 
                     id: resetCryoPrepParametersLabel
-                    Layout.row: 5
+                    Layout.row: 6
                     Layout.column: 0
                     text: "Reset Cryo Prep Parameters"
                     toolTipText: Strings.resetCryoPrepParametersLabelTooltip
@@ -247,7 +285,7 @@ Item {
                 RoundButton {
 
                     id: resetCryoPrepParametersButton
-                    Layout.row: 5
+                    Layout.row: 6
                     Layout.column: 1
                     Layout.alignment: Qt.AlignRight
                     text: "Reset Cryo Prep Parameters"
@@ -275,12 +313,12 @@ Item {
                     onClicked: appController.cryoActivities.reset_parameters()
                 }
 
-                // ---- Row 6: Session Log Size ----
+                // ---- Row 7: Session Log Size ----
 
                 ToolTippedLabel {
 
                     id: sessionLogSizeLabel
-                    Layout.row: 6
+                    Layout.row: 7
                     Layout.column: 0
                     text: "Session Log File Size"
                     toolTipText: Strings.sessionLogSizeLabelTooltip
@@ -290,7 +328,7 @@ Item {
                 Label {
 
                     id: sessionLogSizeValueLabel
-                    Layout.row: 6
+                    Layout.row: 7
                     Layout.column: 1
                     Layout.alignment: Qt.AlignRight
                     text: appController.sessionLog.formatFileSize(
@@ -300,12 +338,12 @@ Item {
 
                 }
 
-                // ---- Row 7: Clear Session Log ----
+                // ---- Row 8: Clear Session Log ----
 
                 ToolTippedLabel {
 
                     id: clearSessionLogLabel
-                    Layout.row: 7
+                    Layout.row: 8
                     Layout.column: 0
                     text: "Clear Session Log"
                     toolTipText: Strings.clearSessionLogLabelTooltip
@@ -315,7 +353,7 @@ Item {
                 RoundButton {
 
                     id: clearSessionLogButton
-                    Layout.row: 7
+                    Layout.row: 8
                     Layout.column: 1
                     Layout.alignment: Qt.AlignRight
                     text: "Clear Session Log"
