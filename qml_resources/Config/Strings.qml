@@ -4,8 +4,11 @@ import "."
 
 QtObject {
 
-    // Main window
-    readonly property string mainWindowTitle: "Aquilos 2 Cryo Utilities 3.0"
+    // Main window. The version comes from the Python package
+    // (aquilos2_cu.__version__) via the appVersion context property,
+    // so the title always matches the actual release number.
+    readonly property string mainWindowTitle:
+        "Aquilos 2 Cryo Utilities " + appVersion
 
     // Dialogs
     readonly property string stagePositionNamePlaceholderText: "Enter a position name"
