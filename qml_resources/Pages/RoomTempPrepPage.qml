@@ -172,9 +172,9 @@ Item {
         Label {
 
             visible: !UiState.compact
-            text: "Activities for preparing the Aquilos 2 for cryo applications. "
-                + "These are intended to be used when the stage is at room temperature. "
-                + "Activities begin from the top of the list."
+            text: "Activities for preparing the Aquilos 2 for cryo work, intended for use "
+                + "while the stage is at room temperature. "
+                + "Activities run from the top of the list down."
             font.pixelSize: AppConfig.pageBodyFontSize
             Layout.fillWidth: true
             wrapMode: Label.WordWrap
