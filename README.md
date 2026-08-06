@@ -1,4 +1,4 @@
-Aquilos 2 Cryo Utilities 3.0
+Aquilos 2 Cryo Utilities 3
 
 Run in simulation mode:
 1. Edit the defaults.py file located in Aquilos2_Cryo_Utilities_3.0/aquilos2_cu/defaults.py

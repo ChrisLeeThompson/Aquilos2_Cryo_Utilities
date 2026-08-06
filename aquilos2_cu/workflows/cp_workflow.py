@@ -65,13 +65,16 @@ Three passes:
   each activity it's about to return. On a mid-run validation
   failure (e.g. a GIS Deposition added mid-run with no position
   selected), the workflow aborts: emit :attr:`validationFailed` for
-  that activity, return ``None`` so the runner ends the loop.
+  that activity, return :meth:`WorkflowRunner._abort_fetch` so the
+  runner ends the loop as not-complete (the success-only stage
+  restore doesn't fire and the abort reason becomes the final
+  status).
   Aborting rather than skipping reflects the layered-deposition
   physics — successive Sputter Coat / GIS Deposition activities lay
   down dependent material layers, so a missing intermediate layer
   would produce an incomplete sample worse than running fewer
-  activities. (A mid-run pre-start check pass is planned alongside
-  this — see :attr:`WorkflowRunner._confirmed_check_types` for the
+  activities. (A mid-run pre-start check pass runs alongside this —
+  see :attr:`WorkflowRunner._confirmed_check_types` for the
   carry-forward of types the user already confirmed at Start.)
 
 Stage position
@@ -125,7 +128,7 @@ from ..pre_start_checks import (
 )
 from ..settings.settings_controller import SettingsController
 from ..stage_positions.controller import StagePositionsController
-from .runner import PreStartValidationResult, WorkflowRunner
+from .runner import FetchOutcome, PreStartValidationResult, WorkflowRunner
 from .settings_snapshot import WorkflowSettingsSnapshot
 
 logger = logging.getLogger(__name__)
@@ -523,7 +526,7 @@ class CPWorkflow(WorkflowRunner):
 
     def _next_pending_activity(
         self, executed_keys: Set[str],
-    ) -> Optional[ActivityService]:
+    ) -> FetchOutcome:
         """Return the next enabled activity not yet executed in this run.
 
         Walks the cryo activity model in current order, skipping
@@ -541,10 +544,12 @@ class CPWorkflow(WorkflowRunner):
         Two-stage failure on each candidate:
 
         * **Parameter validation** — :meth:`_validate_record`. On
-          failure, emits :attr:`validationFailed` and aborts.
+          failure, emits :attr:`validationFailed` and aborts via
+          :meth:`_abort_fetch`.
         * **Pre-start check** — :meth:`_mid_run_pre_start_check_passes`.
-          On failure, the helper emits its own diagnostics; we just
-          return ``None`` to abort.
+          On failure, the helper emits its own diagnostics and
+          records the abort reason; we return ``self._abort_fetch()``
+          to abort.
 
         Both abort the workflow per the layered-deposition contract:
         dependent layers (Sputter Coat, GIS Deposition) build on
@@ -594,24 +599,24 @@ class CPWorkflow(WorkflowRunner):
             error = self._validate_record(record)
             if error is not None:
                 self.validationFailed.emit(record.instance_id, error)
-                self.statusUpdated.emit(
-                    "Workflow aborted: an activity failed validation"
-                )
                 logger.warning(
                     "CPWorkflow: aborting workflow — activity %r "
                     "(instance=%r) failed mid-run validation: %s",
                     activity_id, record.instance_id, error,
                 )
-                return None
+                return self._abort_fetch(
+                    "Workflow aborted: an activity failed validation"
+                )
 
             # Stage 2: mid-run pre-start check. ASK_CONFIRM outcomes
             # whose type was pre-confirmed at workflow Start proceed
             # silently; everything else aborts. Helper emits its own
-            # diagnostics (preStartCheckRefused + status breadcrumb).
+            # diagnostics (preStartCheckRefused + status breadcrumb)
+            # and records the abort reason — no message here.
             if not self._mid_run_pre_start_check_passes(
                 activity_class, self._microscope,
             ):
-                return None
+                return self._abort_fetch()
 
             # Build the service. Construction reads the record's
             # current parameter values; edits made between Start and
@@ -633,7 +638,7 @@ class CPWorkflow(WorkflowRunner):
             if not self._mid_run_pre_start_check_passes(
                 HomeStageService, self._microscope,
             ):
-                return None
+                return self._abort_fetch()
             return self._build_home_stage()
 
         return None
@@ -662,10 +667,11 @@ class CPWorkflow(WorkflowRunner):
         """Restore captured state after the activity loop exits.
 
         The stage position is restored only on a fully successful run
-        (``completed`` is True). After a stop or exception we leave the
-        stage where it is: commanding further motion after an abnormal
-        exit is unsafe (a stop may be a reaction to a collision risk; an
-        exception may mean the stage isn't where we think it is).
+        (``completed`` is True). After a stop, exception, or mid-run
+        abort we leave the stage where it is: commanding further motion
+        after an abnormal exit is unsafe (a stop may be a reaction to a
+        collision risk; an exception may mean the stage isn't where we
+        think it is).
 
         The restore is best-effort. If the capture failed (snapshot is
         None), the restore is skipped. All recorder / snapshot /
