@@ -1,56 +1,32 @@
 """Sputter Coat activity service (Aquilos 2 magnetron plasma coater).
 
 Hardware-side implementation of the Sputter Coat activity used in
-Cryo Prep workflows. Drives the **magnetron plasma sputter coater** —
-a self-contained device that does NOT use the ion beam. (The Aquilos 2
-ion source is a gallium LMIS, which has no plasma-gas selection; the
-Hydra Bio MicroSputter's ion-beam-driven sequence does not apply here.)
-Mirrors the proven v2.5 Aquilos sequence.
-
-Sequence
---------
+Cryo Prep workflows. Drives the magnetron plasma sputter coater, a
+self-contained device that does not use the ion beam (the Aquilos 2
+ion source is a gallium LMIS with no plasma-gas selection). Sequence:
 
 1. Verify the sputter coater is installed (else fail early with
    :class:`ActivityResult.EXCEPTION`).
 2. ``sputter_coater.prepare()`` — moves the stage to the sputter
-   position, switches the chamber to sputter (argon) vacuum, and saves
-   the prior state (uninterruptible; a short settle follows).
+   position and switches the chamber to sputter (argon) vacuum
+   (uninterruptible; a short settle follows).
 3. Pump the chamber to the target pressure and poll
-   ``vacuum.chamber_pressure`` until it equilibrates within tolerance
+   ``vacuum.chamber_pressure`` until it settles within tolerance
    (interruptible per poll; capped poll budget).
 4. Set the magnetron current (mA → A) and let it settle.
-5. Lock the specimen stage axes (x, y, r, t) so the specimen can't
-   drift during plasma ignition.
+5. Lock the specimen stage axes (x, y, r, t) against drift during
+   plasma ignition.
 6. ``sputter_coater.run(duration)`` — strikes the plasma and sputters
-   for the duration (uninterruptible; no grid argument on the
-   Aquilos magnetron).
-7. Unlock the axes, ``sputter_coater.recover()`` (restores the
-   pre-prepare vacuum / state), then wait out the chamber recovery
-   (interruptible per-second loop).
+   for the duration (uninterruptible).
+7. Unlock the axes, ``sputter_coater.recover()``, then wait out the
+   chamber recovery (interruptible per-second loop).
 
-Reliability
------------
-The pump → equilibrate → set-current → lock → run block is retried
-once on any failure, matching v2.5 (reset and try again before giving
-up). A ``try``/``finally`` guarantees that, however the activity exits
-(complete, stop, or exception), the stage axes are unlocked and the
-coater is recovered — the specimen is never left with locked axes or
-the magnetron prepared.
-
-Cancellation
-------------
-Stop checks are issued before every uninterruptible call and on every
-iteration of the pressure-poll and chamber-recovery loops. The two
-operations that can't be interrupted mid-call are
-``sputter_coater.prepare()`` and ``sputter_coater.run()``; the stop
-event is checked immediately after each returns.
-
-Progress reporting
-------------------
-The opaque phases (prepare, run) ride in indeterminate mode. The two
-phases with a knowable total report determinate progress: the
-pressure-equilibration poll (against its poll budget) and the chamber
-recovery (its own ``time.sleep`` loop).
+Steps 3–6 are retried once on any failure. A ``try``/``finally``
+guarantees that, however the activity exits, the stage axes are
+unlocked and the coater is recovered. Stop checks bracket every
+uninterruptible call and run on every iteration of the poll loops.
+The opaque phases ride the progress bar in indeterminate mode; the
+pressure poll and chamber recovery report determinate progress.
 """
 from __future__ import annotations
 
@@ -78,16 +54,15 @@ logger = logging.getLogger(__name__)
 
 
 # Stage axes locked during plasma ignition to prevent specimen drift.
-# Matches the v2.5 magnetron sequence.
 _AXES_TO_LOCK = ("x", "y", "r", "t")
 
 # Post-call settle times (seconds) after the opaque prepare() and the
-# current write, matching v2.5's defensive 2 s delays.
+# current write.
 _PREPARE_SETTLE_S = 2.0
 _CURRENT_SETTLE_S = 2.0
 
-# Number of times to attempt the pump → run block before giving up.
-# v2.5 retries once (two total attempts) on a magnetron startup failure.
+# Number of times to attempt the pump → run block before giving up
+# (one retry on a magnetron startup failure).
 _SPUTTER_ATTEMPTS = 2
 
 
@@ -185,7 +160,7 @@ class SputterCoatService(ActivityService):
                 return ActivityResult.STOP
 
             # --- Pump → equilibrate → set current → lock → run ---
-            # Retried once on any failure (v2.5 behavior).
+            # Retried once on any failure.
             last_exc: Optional[BaseException] = None
             for attempt in range(1, _SPUTTER_ATTEMPTS + 1):
                 if stop_event.is_set():
@@ -253,7 +228,7 @@ class SputterCoatService(ActivityService):
                 return ActivityResult.STOP
 
             # Success path: unlock axes and recover BEFORE the chamber-
-            # recovery countdown, matching the v2.5 order. The finally is
+            # recovery countdown. The finally is
             # the backstop for the stop/exception paths above.
             self._safe_unlock_axes(log_prefix)
             axes_locked = False

@@ -146,7 +146,7 @@ Item {
                 )
                 container.statusMessage = (msg !== "")
                     ? msg
-                    : "Failed — see log for details"
+                    : "Failed (see console log)"
             }
             // status === "stop": ActivityContainer renders no icon for
             // this state, so no tooltip is composed. Whatever message

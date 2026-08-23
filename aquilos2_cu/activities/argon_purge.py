@@ -1,8 +1,7 @@
 """Argon Purge activity (Aquilos 2, RT prep).
 
 Cycles the chamber vacuum through argon pressure steps to purge the
-argon lines and reduce ice contamination before cryo work. Mirrors the
-proven v2.5 Aquilos sequence:
+argon lines and reduce ice contamination before cryo work. Sequence:
 
     1. Initial wait.
     2. For each of N cycles: pump to the high setpoint (30 Pa) and hold

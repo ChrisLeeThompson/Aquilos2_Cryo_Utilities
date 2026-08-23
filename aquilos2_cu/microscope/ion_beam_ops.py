@@ -136,8 +136,7 @@ class SimulatedIonBeamOps:
         # on hardware, where a write of exactly 2π raised "specified
         # value is out of range". Enforcing the same domain here makes
         # out-of-range writes fail in simulation instead of passing
-        # silently (which is how the unwrapped +π scan-rotate-after
-        # bug shipped in 3.0.1).
+        # silently.
         if not 0.0 <= value < math.tau:
             raise ValueError(
                 f"Specified value is out of range: {value!r} rad "

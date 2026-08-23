@@ -1,8 +1,7 @@
 """Cryo Activities controller — QML-facing surface for the activity list.
 
 Owns the :class:`CryoActivitiesModel` and the JSON persistence path.
-Mirrors the structure of :class:`StagePositionsController` from
-Session 4.
+Mirrors the structure of :class:`StagePositionsController`.
 
 Responsibilities:
 
@@ -24,8 +23,8 @@ Workflow execution
 This module owns the *state* of the Cryo activity list. The actual
 execution logic — translating records into running
 :class:`ActivityService` instances — lives in
-:class:`CPWorkflow` (Session 5D) and reads from this controller's
-model when Start is clicked.
+:class:`CPWorkflow` and reads from this controller's model when
+Start is clicked.
 """
 from __future__ import annotations
 
@@ -171,8 +170,7 @@ class CryoActivitiesController(QObject):
         Resolves to the ``templates/`` directory at the project root —
         two levels above this controller file
         (``aquilos2_cu/cryo/controller.py`` -> ``aquilos2_cu/`` ->
-        project root). If your deployment layout differs, override this
-        method or change the path computation.
+        project root).
 
         The directory is created and seeded with the packaged factory
         templates at startup by
@@ -251,19 +249,8 @@ class CryoActivitiesController(QObject):
         targeting the same place, just with default duration and
         recovery values.
 
-        Implementation note: rows are updated in place via
-        :meth:`CryoActivitiesModel.replace_at` rather than wholesale via
-        :meth:`replace_all`. Both reach the same end state for the model,
-        but ``replace_all`` triggers ``beginResetModel`` /
-        ``endResetModel``, which causes QML to destroy and recreate every
-        delegate — discarding delegate-local presentational state,
-        including each activity's ``expanded`` flag. ``replace_at`` emits
-        a per-row ``dataChanged`` instead, so existing delegates survive
-        and any expanded activities stay expanded.
-
         Used by the page's "Reset Parameters" button. The first-launch
-        seeding path uses :meth:`_seed_with_defaults` instead, which
-        replaces the entire list (no delegates exist yet).
+        seeding path uses :meth:`_seed_with_defaults` instead.
         """
         records = self._model.all_records()
         changed = 0
@@ -289,6 +276,9 @@ class CryoActivitiesController(QObject):
                     type(old).__name__,
                 )
                 continue
+            # Note: per-row replace_at (dataChanged) rather than
+            # replace_all (modelReset) so QML keeps existing delegates
+            # and their local state, e.g. each activity's expanded flag.
             if self._model.replace_at(index, new_rec):
                 changed += 1
         self._save()

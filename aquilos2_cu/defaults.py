@@ -73,7 +73,7 @@ ZERO_TILT_BEFORE_GIS_DEPOSITION: bool = True
 # Cycles the chamber vacuum through argon pressure steps to purge the
 # argon lines / reduce ice contamination. The user controls the cycle
 # count and the post-run chamber recovery; the pressure setpoints and
-# poll windows are fixed (they define the procedure) and mirror v2.5.
+# poll windows are fixed (they define the procedure).
 
 ARGON_PURGE_CYCLES_DEFAULT: int = 2
 ARGON_PURGE_CYCLES_MIN: int = 1
@@ -89,9 +89,8 @@ ARGON_PURGE_HIGH_PRESSURE_POLLS: int = 60
 ARGON_PURGE_MID_PRESSURE_PA: float = 15.0
 ARGON_PURGE_MID_TOLERANCE_LO_PA: float = 14.75
 ARGON_PURGE_MID_TOLERANCE_HI_PA: float = 15.5
-# Safety cap on the "wait until 15 Pa settles" loop (v2.5 looped
-# unbounded). On reaching the cap the activity logs a warning and
-# proceeds rather than hanging.
+# Safety cap on the "wait until 15 Pa settles" loop. On reaching the
+# cap the activity logs a warning and proceeds rather than hanging.
 ARGON_PURGE_MID_MAX_POLLS: int = 300
 ARGON_PURGE_LOW_PRESSURE_PA: float = 10.0
 ARGON_PURGE_LOW_PRESSURE_POLLS: int = 30
@@ -123,8 +122,7 @@ GIS_PURGE_DURATION_MAX_S: int = 999
 # The Aquilos 2 magnetron sputter coater is driven by current (mA), a
 # target chamber pressure (Pa), and a duration (s). It does NOT use the
 # ion beam, an ion species, a grid selection, or a high voltage — those
-# were Hydra Bio MicroSputter concepts. Values mirror the proven v2.5
-# Aquilos sequence (see activities/sputter_coat.py).
+# are Hydra Bio MicroSputter concepts (see activities/sputter_coat.py).
 
 # Sputter current (milliamperes). The activity converts to amperes
 # (× 1e-3) before writing to sputter_coater.current. Exposed to QML via
@@ -145,7 +143,7 @@ SPUTTER_PRESSURE_STEP_PA: int = 10
 # target pressure, the activity polls chamber_pressure every
 # SPUTTER_PRESSURE_POLL_INTERVAL_S seconds until it is within
 # SPUTTER_PRESSURE_TOLERANCE_PA of the target, or the poll budget
-# (SPUTTER_PRESSURE_MAX_POLLS) is exhausted — v2.5's 240 × 2 s = 480 s.
+# (SPUTTER_PRESSURE_MAX_POLLS) is exhausted — 240 × 2 s = 480 s.
 SPUTTER_PRESSURE_POLL_INTERVAL_S: float = 2.0
 SPUTTER_PRESSURE_MAX_POLLS: int = 240
 SPUTTER_PRESSURE_TOLERANCE_PA: int = 2
@@ -153,7 +151,7 @@ SPUTTER_PRESSURE_TOLERANCE_PA: int = 2
 # Sputter duration default (seconds). The bounds are shared with the
 # Settings page Bulk / Lamella preset durations
 # (SPUTTER_DURATION_MIN/MAX_S above), so the broad 1–999 range is kept
-# rather than v2.5's narrower 1–60 — the preset feature relies on it.
+# — the preset feature relies on it.
 SPUTTER_COAT_DURATION_DEFAULT_S: int = 120
 
 # Chamber recovery after the sputter run (seconds)
@@ -181,7 +179,7 @@ CHAMBER_RECOVERY_MAX_S: int = 999
 # --- First-launch / Restore-Defaults activity list ----------------------
 
 # Default Cryo workflow shipped with the app: two pairs of
-# (Sputter, GIS) activities, matching v2.1's default. Each entry is
+# (Sputter, GIS) activities. Each entry is
 # a tuple of (activity_type, params_dict). Empty params dicts mean
 # "use all defaults from the constants above" — passed to the matching
 # Record dataclass's ``from_dict``, which fills missing fields.
@@ -216,7 +214,6 @@ TILT_AFTER_ROTATION_ANGLE_DEG_DEFAULT: int = 17
 # user-saved override exists. SettingsController persists the user's
 # edits across sessions; these are the values that ship.
 #
-# Match the v2.1 default behaviour:
 #   * Scan rotate after rotation: ON by default — the typical
 #     workflow rotates the stage and flips the scan rotation in
 #     one gesture.
@@ -234,7 +231,7 @@ TILT_AFTER_ROTATION_DEFAULT: bool = False
 # computed as ``slider_value × STAGE_Z_STEP_SIZE_M``; the wait between
 # ticks is ``STAGE_Z_TICK_INTERVAL_S`` (seconds).
 #
-# Step size matches v2.1 (2.5 µm/step). Tick interval (50 ms) keeps
+# Step size is 2.5 µm/step. Tick interval (50 ms) keeps
 # the slider responsive without spamming the AutoScript input queue.
 # At slider = ±25 (the AppConfig.qml limits) and these defaults, the
 # worker produces ~1.25 mm/s of effective Z velocity at the extremes.
@@ -267,13 +264,11 @@ STAGE_SAFE_RANGE_POLL_INTERVAL_S: float = 0.5
 # not physically dangerous ones — the user can still confirm
 # and proceed. Bump this as real hardware experience accrues.
 #
-# Tilt was previously included as a third axis-wise component
-# and was dropped: legitimate operating positions (e.g., the
-# GIS deposition default at 60°) routinely exceed any
-# conservative tilt threshold, and the radial XY check already
-# catches the operationally unusual positions where tilt would
-# correlate with concern. The snapshot still carries
-# ``stage_t_rad`` for future checks that may need it.
+# Tilt is deliberately not part of the check: legitimate operating
+# positions (e.g., the GIS deposition default at 60°) routinely
+# exceed any conservative tilt threshold, and the radial XY check
+# already catches the operationally unusual positions. The snapshot
+# still carries ``stage_t_rad`` for checks that may need it.
 
 STAGE_SAFE_RADIAL_RANGE_M: float = 8e-3   # 8 mm from chamber center
 

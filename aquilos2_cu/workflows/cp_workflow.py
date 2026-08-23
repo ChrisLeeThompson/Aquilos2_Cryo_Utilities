@@ -4,92 +4,27 @@ Runs a user-composed list of Cryo activities (Sputter Coat, GIS
 Deposition) plus an optional Home Stage at the end. The activity list
 and per-activity parameters are owned by :class:`CryoActivitiesController`;
 this runner reads them as the workflow runner asks for the next
-pending activity.
+pending activity, so additions, deletions, and switch toggles made
+mid-run take effect at the next fetch. Switches are session-only and
+default to off; :attr:`canStart` is true iff at least one activity (or
+Home Stage) is enabled and the workflow isn't already running.
 
-Iterative-fetch architecture
-----------------------------
-Activities are fetched one at a time via
-:meth:`_next_pending_activity` rather than snapshotted at start. This
-lets the user mutate the activity list while a workflow is running:
+Validation runs in three passes: parameter validation of every enabled
+activity at Start (all-or-nothing, every failure reported via
+:attr:`validationFailed`); the pre-start checks declared by each
+enabled activity class, routed through the runner's two-step Start
+(REFUSE / ASK_CONFIRM); and a per-fetch repeat of both for the activity
+about to run. A mid-run failure aborts the workflow rather than
+skipping the activity — successive Sputter Coat / GIS Deposition
+activities lay down dependent material layers, and a missing
+intermediate layer is worse than running fewer activities.
 
-* **Adding** an activity mid-run (and switching it on) makes it
-  pending — the runner picks it up on the next fetch, after the
-  current activity finishes.
-* **Toggling** a switch off mid-run on a not-yet-started activity
-  makes it invisible to the next fetch and so it isn't run. (The QML
-  binding locks switches on activities past idle, so toggling never
-  affects activities that are already running, complete, or in
-  exception.)
-* **Deleting** a not-yet-started activity is similarly transparent —
-  it's no longer in the model on the next fetch.
-
-Per-activity enabled state
---------------------------
-Each cryo activity has an associated UI switch. The switches are
-session-only (not persisted) and default to off — the user explicitly
-opts in to which activities run on each workflow.
-
-The runner tracks enabled state in two structures:
-
-* ``_enabled_instance_ids: set[str]`` — instance ids of cryo activities
-  whose switches are on. QML pushes to this via
-  :meth:`set_activity_enabled`.
-* ``_home_stage_enabled: bool`` — independent flag for Home Stage.
-  QML pushes via :meth:`set_home_stage_enabled`.
-
-The :attr:`canStart` Property derives reactively from these — true
-iff at least one cryo activity is enabled OR Home Stage is enabled,
-*and* the workflow isn't already running.
-
-Validation
-----------
-Three passes:
-
-* **Parameter validation at start** — :meth:`_validate_pre_start`
-  walks every currently-enabled activity and validates each one.
-  On any failure, emits :attr:`validationFailed` for each offending
-  activity (collected in one pass so the user sees every problem at
-  once) and refuses the start. All-or-nothing so the user can fix
-  every problem before retrying.
-
-* **Pre-start check at start** — :meth:`_validate_pre_start` then
-  gathers the pre-start checks declared by each enabled activity
-  class and runs them through the orchestrator
-  (:mod:`aquilos2_cu.pre_start_checks`). A REFUSE outcome (e.g.
-  GIS Deposition enabled but Z not linked) refuses the start with
-  the :attr:`preStartCheckRefused` signal; an ASK_CONFIRM outcome
-  (e.g. stage in an unusual position) pauses the start pending
-  user confirmation via the runner's two-step Start state machine.
-
-* **Mid-run validation** — :meth:`_next_pending_activity` validates
-  each activity it's about to return. On a mid-run validation
-  failure (e.g. a GIS Deposition added mid-run with no position
-  selected), the workflow aborts: emit :attr:`validationFailed` for
-  that activity, return :meth:`WorkflowRunner._abort_fetch` so the
-  runner ends the loop as not-complete (the success-only stage
-  restore doesn't fire and the abort reason becomes the final
-  status).
-  Aborting rather than skipping reflects the layered-deposition
-  physics — successive Sputter Coat / GIS Deposition activities lay
-  down dependent material layers, so a missing intermediate layer
-  would produce an incomplete sample worse than running fewer
-  activities. (A mid-run pre-start check pass runs alongside this —
-  see :attr:`WorkflowRunner._confirmed_check_types` for the
-  carry-forward of types the user already confirmed at Start.)
-
-Stage position
---------------
-If :attr:`SettingsController.moveStageToOriginalPosition` is true, the
-runner captures the stage position once at the start of the workflow
-and restores it at the end *on a successful run only*. Capture/restore
-happens via :class:`StageRecorder` in the workflow's
-:meth:`_before_run` / :meth:`_after_run` hooks (so they execute on the
-worker thread, not the GUI thread). The recorder is constructed in
-:meth:`_on_commit_to_run` — only when the runner has committed to
-actually starting the run and the setting is on.
-
-(The Aquilos 2 magnetron Sputter Coat does not touch the ion beam, so
-there is no ion-beam state to capture or restore around a Cryo run.)
+If :attr:`SettingsController.moveStageToOriginalPosition` is on, the
+stage position is captured in :meth:`_before_run` and restored in
+:meth:`_after_run` — only after a fully successful run; a stopped,
+failed, or aborted run leaves the stage exactly where it is. The
+Aquilos 2 magnetron Sputter Coat does not touch the ion beam, so there
+is no ion-beam state to capture or restore.
 """
 from __future__ import annotations
 
@@ -273,48 +208,23 @@ class CPWorkflow(WorkflowRunner):
     def _validate_pre_start(self) -> PreStartValidationResult:
         """All-or-nothing validation pass at start.
 
-        Three-stage pipeline. Each stage refuses the start outright
-        on failure; stages run in order so cheap GUI-state checks
-        precede expensive hardware reads.
+        Three stages, each refusing the start outright on failure;
+        cheap GUI-state checks precede hardware reads:
 
-        Stage 1 — :attr:`canStart` guard. Defensive: QML should have
-        the Start button disabled if no activity is enabled, but if
-        :meth:`start` is called anyway, refuse cleanly.
+        1. :attr:`canStart` guard (defensive — QML disables Start when
+           nothing is enabled).
+        2. Parameter validation of every enabled cryo activity. All
+           failures are collected and emitted via
+           :attr:`validationFailed` so the user sees every problem at
+           once; returns ``"refused"``.
+        3. Pre-start checks gathered from the enabled activity classes.
+           REFUSE → :attr:`preStartCheckRefused` and ``"refused"``;
+           ASK_CONFIRM → :attr:`preStartCheckNeedsConfirmation` and
+           ``"needs_confirmation"`` with the pending check types;
+           PASS → ``"ok"``.
 
-        Stage 2 — parameter validation. Walks every currently-enabled
-        cryo activity and validates each one (e.g. GIS Deposition
-        references a stale position). On any failure, emits
-        :attr:`validationFailed` per offending activity (collected in
-        one pass so the user sees every problem at once) and a
-        generic StatusBar message; returns ``"refused"``.
-
-        Stage 3 — pre-start checks. Gathers the checks declared by
-        each enabled activity class (Z linked, stage position within
-        safe range, ...), runs them through the orchestrator, and
-        routes the outcome:
-
-        * REFUSE → emit :attr:`preStartCheckRefused` with the
-          check-result items, status breadcrumb ``"Pre-start check
-          failed"``, return ``"refused"``.
-        * ASK_CONFIRM → emit :attr:`preStartCheckNeedsConfirmation`,
-          return ``"needs_confirmation"`` with the set of check types
-          the user is being asked to confirm (carried forward into
-          :attr:`WorkflowRunner._confirmed_check_types` on accept).
-        * PASS → fall through.
-
-        On stage-3 PASS (and only then), return
-        ``PreStartValidationResult(outcome="ok")``. State capture
-        (workflow settings snapshot, stage recorder) does NOT happen
-        here — it moves to :meth:`_on_commit_to_run`, which fires
-        only when the runner has actually committed to the run
-        (either an outright OK or an accepted confirmation).
-
-        Why all-or-nothing here, vs. abort-on-fetch in
-        :meth:`_next_pending_activity`: at start, the user has the
-        chance to fix every problem before committing to a run. After
-        the run begins, deposition layers are already being laid
-        down, and aborting at the first mid-run failure preserves the
-        layered-sample integrity (see module docstring).
+        State capture (settings snapshot, stage recorder) happens in
+        :meth:`_on_commit_to_run`, not here.
         """
         # --- Stage 1: canStart guard ---
         if not self.canStart:
@@ -486,31 +396,16 @@ class CPWorkflow(WorkflowRunner):
         return None
 
     def _on_commit_to_run(self) -> None:
-        """Capture workflow settings + set up the stage recorder.
+        """Capture workflow settings and set up the stage recorder.
 
-        Fires on every path that commits to a run — either an
-        outright ``"ok"`` from :meth:`_validate_pre_start` or an
-        accepted confirmation via
-        :meth:`WorkflowRunner.respondToConfirmation`. Never fires on
-        refused or cancelled paths, so the captured state always
-        binds to a run that's about to start.
-
-        Why state capture moved here from ``_validate_pre_start``:
-        with the two-step Start, ``_validate_pre_start`` may return
-        ``"needs_confirmation"`` and pause for an arbitrary amount
-        of time before the user accepts or rejects. Capturing
-        settings/recorder there would either:
-
-        * Capture too early — locking the user out of editing
-          Settings during the dialog wait, which is surprising and
-          out of step with the workflow-not-yet-started state.
-        * Capture potentially stale state — by the time the user
-          accepts, the captured settings might no longer match what
-          they intended.
-
-        Capturing at the commit point matches the snapshot's
-        "values as of commit" intent. See also
-        :class:`WorkflowSettingsSnapshot`'s module docstring.
+        Fires on every path that commits to a run — an outright
+        ``"ok"`` from :meth:`_validate_pre_start` or an accepted
+        confirmation via :meth:`WorkflowRunner.respondToConfirmation`
+        — and never on refused or cancelled paths. Capturing here
+        rather than in ``_validate_pre_start`` matters because the
+        confirm dialog may stay open for an arbitrary time: the
+        snapshot reflects the settings as of the moment the run
+        actually commits. See :class:`WorkflowSettingsSnapshot`.
         """
         self._settings_snapshot = WorkflowSettingsSnapshot.from_settings(
             self._settings
@@ -530,40 +425,16 @@ class CPWorkflow(WorkflowRunner):
         """Return the next enabled activity not yet executed in this run.
 
         Walks the cryo activity model in current order, skipping
-        disabled activities and activities already executed (or
-        aborted). For each candidate, validates and returns the
-        corresponding :class:`ActivityService`.
+        disabled and already-executed activities, so mid-run toggles
+        and additions take effect at the next fetch. Each candidate
+        goes through :meth:`_validate_record` and then
+        :meth:`_mid_run_pre_start_check_passes`; either failure aborts
+        the workflow via :meth:`_abort_fetch` (dependent deposition
+        layers make skipping worse than stopping).
 
-        Mid-run toggle-off folds in here for free: if the user toggles
-        an activity off after Start, it's no longer in
-        :attr:`_enabled_instance_ids` and isn't returned. Mid-run
-        additions appear automatically — when the user adds and
-        switches on a new activity, the next fetch sees it in the
-        model.
-
-        Two-stage failure on each candidate:
-
-        * **Parameter validation** — :meth:`_validate_record`. On
-          failure, emits :attr:`validationFailed` and aborts via
-          :meth:`_abort_fetch`.
-        * **Pre-start check** — :meth:`_mid_run_pre_start_check_passes`.
-          On failure, the helper emits its own diagnostics and
-          records the abort reason; we return ``self._abort_fetch()``
-          to abort.
-
-        Both abort the workflow per the layered-deposition contract:
-        dependent layers (Sputter Coat, GIS Deposition) build on
-        each other, so silently skipping a failed activity would
-        leave gaps in the sample worse than running fewer activities
-        cleanly.
-
-        Home Stage is always considered last, mirroring the previous
-        snapshot order. Its key is ``"home_stage/"`` (single-instance,
-        empty instance_id). It gets the same mid-run pre-start check
-        treatment as the cryo activities.
-
-        Unknown record types are skipped silently — we mark them in
-        ``executed_keys`` to avoid retrying on every iteration.
+        Home Stage is always considered last (key ``"home_stage/"``)
+        and gets the same mid-run pre-start check. Unknown record
+        types are marked in ``executed_keys`` and skipped.
         """
         for record in self._cryo_activities.model.all_records():
             # Skip if not switched on (handles mid-run toggle-off).
@@ -758,10 +629,9 @@ class CPWorkflow(WorkflowRunner):
     def _build_home_stage(self) -> HomeStageService:
         """Construct a HomeStageService for the end-of-workflow home.
 
-        Home Stage takes no parameters — the former
-        ``move_to_original`` arg was removed when stage restore became
-        a workflow-level concern (handled by this runner's
-        :class:`StageRecorder`, gated on a successful run).
+        Home Stage takes no parameters; returning the stage to its
+        original position is handled by this runner's
+        :class:`StageRecorder`, gated on a successful run.
         """
         return HomeStageService(
             stage=self._microscope.stage,

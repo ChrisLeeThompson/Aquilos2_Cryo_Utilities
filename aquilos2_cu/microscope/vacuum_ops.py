@@ -83,8 +83,7 @@ class VacuumOps:
 
         Used by Sputter Coat *after* ``sputter_coater.prepare()`` has
         already switched the chamber to sputter vacuum and set the gas
-        to argon — so only the target pressure is specified here,
-        mirroring the v2.5 sequence.
+        to argon — so only the target pressure is specified here.
         """
         from autoscript_sdb_microscope_client.structures import VacuumSettings
 
