@@ -7,21 +7,32 @@ ion source is a gallium LMIS with no plasma-gas selection). Sequence:
 
 1. Verify the sputter coater is installed (else fail early with
    :class:`ActivityResult.EXCEPTION`).
-2. ``sputter_coater.prepare()`` — moves the stage to the sputter
+2. Tilt the stage to 0° under the holder selected now, verified by an
+   arrival check (see ``microscope/stage_moves.py``). The coater
+   routine moves the stage from here and returns it here, so a
+   high-tilt position left by a GIS deposition must not be the return
+   point.
+3. Select the holder the coater runs under (``required_holder``, the
+   AutoGrid shuttle holder in the workflow), verified by readback — a
+   GIS deposition may have left another holder selected. No-op when
+   already selected.
+4. ``sputter_coater.prepare()`` — moves the stage to the sputter
    position and switches the chamber to sputter (argon) vacuum
    (uninterruptible; a short settle follows).
-3. Pump the chamber to the target pressure and poll
+5. Pump the chamber to the target pressure and poll
    ``vacuum.chamber_pressure`` until it settles within tolerance
    (interruptible per poll; capped poll budget).
-4. Set the magnetron current (mA → A) and let it settle.
-5. Lock the specimen stage axes (x, y, r, t) against drift during
+6. Set the magnetron current (mA → A) and let it settle.
+7. Lock the specimen stage axes (x, y, r, t) against drift during
    plasma ignition.
-6. ``sputter_coater.run(duration)`` — strikes the plasma and sputters
+8. ``sputter_coater.run(duration)`` — strikes the plasma and sputters
    for the duration (uninterruptible).
-7. Unlock the axes, ``sputter_coater.recover()``, then wait out the
+9. Unlock the axes, ``sputter_coater.recover()``, then wait out the
    chamber recovery (interruptible per-second loop).
 
-Steps 3–6 are retried once on any failure. A ``try``/``finally``
+Steps 2–3 run only when the activity was given a holder
+(``required_holder``); the Cryo Prep workflow always passes one.
+Steps 5–8 are retried once on any failure. A ``try``/``finally``
 guarantees that, however the activity exits, the stage axes are
 unlocked and the coater is recovered. Stop checks bracket every
 uninterruptible call and run on every iteration of the poll loops.
@@ -36,7 +47,9 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .. import defaults
+from ..microscope.holder import select_holder
 from ..microscope.sputter_ops import SputterOpsLike
+from ..microscope.stage_moves import tilt_to_zero
 from ..microscope.stage_ops import StageOpsLike
 from ..microscope.vacuum_ops import VacuumOpsLike
 from ..pre_start_checks import PreStartCheck
@@ -81,12 +94,19 @@ class SputterCoatService(ActivityService):
         duration_s: int,
         chamber_recovery_s: int,
         instance_id: str,
+        required_holder: str = "",
     ) -> None:
         """Construct the activity.
 
         Parameters mirror the :class:`SputterCoatRecord` fields. The
         ``instance_id`` is forwarded so log messages can disambiguate
         multiple Sputter Coat instances in the same workflow.
+
+        ``required_holder`` is the xT holder the coater runs under
+        (``defaults.SPUTTER_COAT_HOLDER`` in the Cryo Prep workflow);
+        the activity tilts the stage to 0° before selecting it. Empty
+        means "leave the stage and the holder alone" before the coater
+        routine.
         """
         super().__init__()
         self._sputter = sputter_ops
@@ -97,6 +117,7 @@ class SputterCoatService(ActivityService):
         self._pressure_pa = int(pressure_pa)
         self._duration_s = int(duration_s)
         self._chamber_recovery_s = int(chamber_recovery_s)
+        self._required_holder = str(required_holder)
         # Override the class default with this instance's id. Read by
         # the workflow runner for per-instance status routing.
         self.instance_id = str(instance_id)
@@ -137,6 +158,44 @@ class SputterCoatService(ActivityService):
         # The whole hardware sequence is opaque from our side until the
         # pressure poll, so start the bar in indeterminate mode.
         report_indeterminate(on_progress)
+
+        if self._required_holder:
+            # --- Tilt to 0° ---
+            # Flat first, under the holder selected now. The coater
+            # routine moves the stage from here and returns it here; a
+            # preceding GIS Deposition may have left it at a high-tilt
+            # position that the holder selected below does not permit.
+            # Verified by an arrival check — see microscope/stage_moves.py.
+            if stop_event.is_set():
+                return ActivityResult.STOP
+            try:
+                tilt_to_zero(self._stage, on_status=on_status)
+            except Exception as exc:
+                report_activity_exception(
+                    on_status, log_prefix, status_prefix, "tilt to zero", exc,
+                )
+                return ActivityResult.EXCEPTION
+
+            # --- Holder ---
+            # Select the holder the coater runs under (the AutoGrid
+            # shuttle holder in the workflow). A preceding GIS
+            # Deposition may have left the holder its position was
+            # saved with selected. Selected while the stage is flat;
+            # verified by readback — see microscope/holder.py.
+            if stop_event.is_set():
+                return ActivityResult.STOP
+            try:
+                select_holder(
+                    self._stage, self._required_holder,
+                    should_abort=stop_event.is_set,
+                    on_status=on_status,
+                )
+            except Exception as exc:
+                report_activity_exception(
+                    on_status, log_prefix, status_prefix,
+                    "holder selection", exc,
+                )
+                return ActivityResult.EXCEPTION
 
         # --- Prepare (uninterruptible; stop-checked around it) ---
         if stop_event.is_set():
@@ -227,7 +286,7 @@ class SputterCoatService(ActivityService):
                 )
                 return ActivityResult.STOP
 
-            # Success path: unlock axes and recover BEFORE the chamber-
+            # Success path: unlock axes and recover before the chamber-
             # recovery countdown. The finally is
             # the backstop for the stop/exception paths above.
             self._safe_unlock_axes(log_prefix)
@@ -365,8 +424,10 @@ class SputterCoatService(ActivityService):
         before any of the activity's hardware steps.
 
         Advisory (ASK_CONFIRM on failure) — the operationally
-        meaningful starting position is surfaced before the workflow's
-        adjacent activities (GIS Deposition, Home Stage) move the stage.
+        meaningful starting position is surfaced before the activity
+        tilts the stage flat and the coater routine moves it. Whether
+        Microscope Control lists the holder the coater runs under is
+        checked by the workflow's Start validation, not here.
         """
         return [StagePositionWithinSafeRangeCheck()]
 
@@ -382,4 +443,7 @@ class SputterCoatService(ActivityService):
             "pressure_pa": self._pressure_pa,
             "duration_s": self._duration_s,
             "chamber_recovery_s": self._chamber_recovery_s,
+            # The holder the coater ran under; empty = the holder was
+            # left alone.
+            "holder": self._required_holder,
         }

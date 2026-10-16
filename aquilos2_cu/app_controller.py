@@ -164,7 +164,7 @@ class AppController(QObject):
         self._stage_scan: Optional[StageScanController] = None
 
         # Cryo activities controller. Unlike the workflow runners, it
-        # does NOT need the microscope client to construct — its
+        # does not need the microscope client to construct — its
         # responsibility is just managing the list of activity records
         # and persisting them. Workflow execution (which does need
         # the microscope) lives in CPWorkflow and reads this
@@ -427,7 +427,7 @@ class AppController(QObject):
         # to the SDB client; running them past disconnect would raise,
         # and disconnecting while a hardware op (sputter run, stage move,
         # GIS) is in flight risks an indeterminate state. So request stop
-        # on each running workflow, then JOIN its worker thread before
+        # on each running workflow, then join its worker thread before
         # disconnecting — mirroring the connect-thread / stage_scan join
         # pattern. (The cross-page lock means at most one runs, but we
         # iterate defensively.)
@@ -520,6 +520,7 @@ class AppController(QObject):
         # before any workflow runner that depends on it.
         self._stage_positions = StagePositionsController(
             microscope=self._microscope,
+            settings=self._settings,
             parent=self,
         )
         # Stage Move uses the same running-id mechanism as workflow

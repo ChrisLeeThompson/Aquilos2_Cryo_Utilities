@@ -30,9 +30,10 @@ clarity layered on top.
 Shared between RT and CP
 ------------------------
 Both :class:`RTWorkflow` and :class:`CPWorkflow` capture the same
-dataclass. RT doesn't read every field (e.g. the GIS-deposition
-zero-tilt flag is CP-only), but a single shape avoids divergence if a
-future RT activity grows the same dependency.
+dataclass. Both read ``zero_tilt_before_stage_moves`` for the
+end-of-run stage restore; a single shape avoids divergence if a future
+RT activity grows the same dependency. The holder selected at Start is
+not a setting; the CP workflow captures it itself.
 """
 from __future__ import annotations
 
@@ -56,7 +57,7 @@ class WorkflowSettingsSnapshot:
 
     gis_gas_port_name: str
     move_stage_to_original: bool
-    zero_tilt_before_gis_deposition: bool
+    zero_tilt_before_stage_moves: bool
 
     @classmethod
     def from_settings(
@@ -66,7 +67,7 @@ class WorkflowSettingsSnapshot:
         return cls(
             gis_gas_port_name=settings.gisGasPortName,
             move_stage_to_original=settings.moveStageToOriginalPosition,
-            zero_tilt_before_gis_deposition=(
-                settings.zeroTiltBeforeGisDeposition
+            zero_tilt_before_stage_moves=(
+                settings.zeroTiltBeforeStageMoves
             ),
         )

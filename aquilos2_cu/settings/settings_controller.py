@@ -29,7 +29,9 @@ _PREFIX = defaults.SCHEMA_PREFIX
 _K_ALWAYS_ON_TOP = _PREFIX + "alwaysOnTop"
 _K_GIS_GAS_PORT_NAME = _PREFIX + "gisGasPortName"
 _K_MOVE_STAGE_TO_ORIGINAL = _PREFIX + "moveStageToOriginalPosition"
-_K_ZERO_TILT_BEFORE_GIS_DEPOSITION = _PREFIX + "zeroTiltBeforeGisDeposition"
+# Key kept from v3.0.6 ("zeroTiltBeforeGisDeposition") so a stored
+# choice carries over; since v3.1.0 the setting covers every stage move.
+_K_ZERO_TILT_BEFORE_STAGE_MOVES = _PREFIX + "zeroTiltBeforeGisDeposition"
 _K_SCAN_ROTATE_AFTER_ROTATION = _PREFIX + "scanRotateAfterRotation"
 _K_ZERO_TILT_BEFORE_ROTATION = _PREFIX + "zeroTiltBeforeRotation"
 _K_TILT_AFTER_ROTATION = _PREFIX + "tiltAfterRotation"
@@ -44,7 +46,7 @@ class SettingsController(QObject):
     alwaysOnTopChanged = Signal()
     gisGasPortNameChanged = Signal()
     moveStageToOriginalPositionChanged = Signal()
-    zeroTiltBeforeGisDepositionChanged = Signal()
+    zeroTiltBeforeStageMovesChanged = Signal()
     scanRotateAfterRotationChanged = Signal()
     zeroTiltBeforeRotationChanged = Signal()
     tiltAfterRotationChanged = Signal()
@@ -67,9 +69,9 @@ class SettingsController(QObject):
         self._move_to_original = self._read_bool(
             _K_MOVE_STAGE_TO_ORIGINAL, defaults.MOVE_STAGE_TO_ORIGINAL_POSITION
         )
-        self._zero_tilt_before_gis_deposition = self._read_bool(
-            _K_ZERO_TILT_BEFORE_GIS_DEPOSITION,
-            defaults.ZERO_TILT_BEFORE_GIS_DEPOSITION,
+        self._zero_tilt_before_stage_moves = self._read_bool(
+            _K_ZERO_TILT_BEFORE_STAGE_MOVES,
+            defaults.ZERO_TILT_BEFORE_STAGE_MOVES,
         )
         self._scan_rotate_after_rotation = self._read_bool(
             _K_SCAN_ROTATE_AFTER_ROTATION,
@@ -135,25 +137,26 @@ class SettingsController(QObject):
         self._qs.setValue(_K_MOVE_STAGE_TO_ORIGINAL, value)
         self.moveStageToOriginalPositionChanged.emit()
 
-    # --- Zero tilt before GIS deposition -----------------------------------
+    # --- Zero tilt before stage moves ----------------------------------------
     #
-    # When True, each GIS Deposition activity tilts the stage to zero
-    # degrees before moving to its deposition position (the XY/Z move
-    # then happens from a flat orientation). Read into the workflow
-    # settings snapshot at Start and passed to each GISDepositionService.
+    # When True, every move to a saved or captured position is a staged
+    # move (tilt to 0°, X/Y/Z/R, tilt to the position's tilt) — see
+    # microscope/stage_moves.py. Read into the workflow settings
+    # snapshot at Start for GIS Deposition and the stage restore, and
+    # read live by the Stage Positions controller for Move To.
 
-    @Property(bool, notify=zeroTiltBeforeGisDepositionChanged)
-    def zeroTiltBeforeGisDeposition(self) -> bool:
-        return self._zero_tilt_before_gis_deposition
+    @Property(bool, notify=zeroTiltBeforeStageMovesChanged)
+    def zeroTiltBeforeStageMoves(self) -> bool:
+        return self._zero_tilt_before_stage_moves
 
-    @zeroTiltBeforeGisDeposition.setter
-    def zeroTiltBeforeGisDeposition(self, value: bool) -> None:
+    @zeroTiltBeforeStageMoves.setter
+    def zeroTiltBeforeStageMoves(self, value: bool) -> None:
         value = bool(value)
-        if value == self._zero_tilt_before_gis_deposition:
+        if value == self._zero_tilt_before_stage_moves:
             return
-        self._zero_tilt_before_gis_deposition = value
-        self._qs.setValue(_K_ZERO_TILT_BEFORE_GIS_DEPOSITION, value)
-        self.zeroTiltBeforeGisDepositionChanged.emit()
+        self._zero_tilt_before_stage_moves = value
+        self._qs.setValue(_K_ZERO_TILT_BEFORE_STAGE_MOVES, value)
+        self.zeroTiltBeforeStageMovesChanged.emit()
 
     # --- Scan Rotate After Rotation ---------------------------------------
 

@@ -11,7 +11,7 @@ import "../Config"
 //   • sputter duration (s)
 //   • chamber recovery (s)
 //
-// It does NOT use the ion beam, an ion species, grids, or a high
+// It does not use the ion beam, an ion species, grids, or a high
 // voltage — those were Hydra Bio MicroSputter concepts.
 //
 // Per-instance state model: same pattern as GISDeposition.qml. Multiple

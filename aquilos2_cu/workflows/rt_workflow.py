@@ -28,6 +28,7 @@ they were loaded from.
 from __future__ import annotations
 
 import logging
+import time
 from typing import List, Optional
 
 from PySide6.QtCore import Property, QObject, QSettings, Signal, Slot
@@ -49,7 +50,15 @@ from ..pre_start_checks import (
     to_dialog_items,
 )
 from ..settings.settings_controller import SettingsController
-from .runner import FetchOutcome, PreStartValidationResult, WorkflowRunner
+from .runner import (
+    STAGE_CAPTURE_FAILED_WARNING,
+    STAGE_RESTORE_FAILED_WARNING,
+    FetchOutcome,
+    PreStartValidationResult,
+    WorkflowRunner,
+    build_abandon_predicate,
+    build_stage_restore_record,
+)
 from .settings_snapshot import WorkflowSettingsSnapshot
 
 logger = logging.getLogger(__name__)
@@ -235,13 +244,13 @@ class RTWorkflow(WorkflowRunner):
                     "RTWorkflow: pre-start hardware read failed; refusing "
                     "to start"
                 )
-                self.statusUpdated.emit("Cannot start: hardware read failed")
+                self._emit_status("Cannot start: hardware read failed")
                 return PreStartValidationResult(outcome="refused")
 
             if summary.refused:
                 items = to_dialog_items(summary.refused)
                 self.preStartCheckRefused.emit(items)
-                self.statusUpdated.emit("Pre-start check failed")
+                self._emit_status("Pre-start check failed")
                 logger.info(
                     "RTWorkflow: refusing to start "
                     "(%d pre-start check%s failed)",
@@ -331,6 +340,10 @@ class RTWorkflow(WorkflowRunner):
                     "restore"
                 )
                 self._stage_snapshot = None
+                # Surfaced in the final status text (first warning
+                # wins) so the skipped restore isn't silent.
+                if not self._after_run_warning:
+                    self._after_run_warning = STAGE_CAPTURE_FAILED_WARNING
 
     def _after_run(self, on_status: StatusCallback, completed: bool) -> None:
         """Restore the stage position (success only) and clear snapshots.
@@ -338,22 +351,67 @@ class RTWorkflow(WorkflowRunner):
         The only restore is the stage position, and only on a fully
         successful run (``completed`` is True). After a stop or
         exception the stage is left where it is — commanding further
-        motion after an abnormal exit is unsafe. References (stage
+        motion after an abnormal exit is unsafe. The return is a staged
+        move with arrival checks (see ``microscope/stage_moves.py``);
+        an abandon between its stages leaves the stage where it is and
+        is reported like a skipped restore. References (stage
         recorder/snapshot and the settings snapshot) are cleared
-        unconditionally so nothing leaks into a
-        subsequent run.
+        unconditionally so nothing leaks into a subsequent run.
         """
-        if completed:
+        # Latched Stop-press abandon semantics — a Stop press while
+        # only this cleanup is running (or a second press on the stop
+        # path) skips the stage move. See build_abandon_predicate.
+        should_abandon = build_abandon_predicate(
+            self._stop_event, self._abandon_event,
+        )
+
+        if completed and should_abandon():
+            logger.warning(
+                "RTWorkflow: cleanup abandoned; skipping stage-position "
+                "restore"
+            )
+            if not self._after_run_warning:
+                self._after_run_warning = (
+                    "Cleanup abandoned — stage not restored"
+                )
+        elif completed:
             if (self._stage_recorder is not None
                     and self._stage_snapshot is not None):
                 on_status("Returning stage to original position...")
+                t0_stage = time.monotonic()
                 try:
-                    self._stage_recorder.restore(self._stage_snapshot)
-                except Exception:
+                    arrived = self._stage_recorder.restore(
+                        self._stage_snapshot,
+                        staged=self._settings_snapshot.zero_tilt_before_stage_moves,
+                        should_abandon=should_abandon,
+                        on_status=on_status,
+                    )
+                except Exception as exc:
                     logger.exception(
                         "RTWorkflow: stage restore failed; stage may not be "
                         "at its original position"
                     )
+                    # Surfaced in the final bar text (first warning
+                    # wins) and recorded in the session log.
+                    if not self._after_run_warning:
+                        self._after_run_warning = STAGE_RESTORE_FAILED_WARNING
+                    self._after_run_records.append(
+                        build_stage_restore_record(
+                            exc, self._stage_snapshot,
+                            duration_s=time.monotonic() - t0_stage,
+                        )
+                    )
+                else:
+                    if not arrived:
+                        # Abandon between stages of the staged return.
+                        logger.warning(
+                            "RTWorkflow: stage restore abandoned between "
+                            "stages; stage not at its original position"
+                        )
+                        if not self._after_run_warning:
+                            self._after_run_warning = (
+                                "Cleanup abandoned — stage not restored"
+                            )
         elif self._stage_recorder is not None:
             logger.info(
                 "RTWorkflow: skipping stage restore (run did not complete "

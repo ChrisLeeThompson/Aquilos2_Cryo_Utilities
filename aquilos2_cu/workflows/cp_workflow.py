@@ -25,11 +25,19 @@ stage position is captured in :meth:`_before_run` and restored in
 failed, or aborted run leaves the stage exactly where it is. The
 Aquilos 2 magnetron Sputter Coat does not touch the ion beam, so there
 is no ion-beam state to capture or restore.
+
+Holders: GIS Deposition selects the holder its position was saved
+with (the holder selected at Start, the Start holder, for a position
+with none); Sputter Coat and Home Stage tilt the stage flat and select
+the AutoGrid shuttle holder (``defaults.SPUTTER_COAT_HOLDER``,
+``defaults.HOME_STAGE_HOLDER``); and the run selects the Start holder
+again when it ends, on every exit path.
 """
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Set
+import time
+from typing import List, Optional, Set, Tuple
 
 from PySide6.QtCore import (
     Property,
@@ -39,7 +47,7 @@ from PySide6.QtCore import (
 )
 
 from .. import defaults
-from ..activities.base import ActivityService, StatusCallback
+from ..activities.base import ActivityResult, ActivityService, StatusCallback
 from ..activities.gis_deposition import GISDepositionService
 from ..activities.home_stage import HomeStageService
 from ..activities.sputter_coat import SputterCoatService
@@ -51,22 +59,63 @@ from ..cryo.activity_records import (
 )
 from ..cryo.controller import CryoActivitiesController
 from ..microscope import MicroscopeClientLike
+from ..microscope.holder import needs_confirmation, select_holder
 from ..microscope.recorders.stage_position import (
     StagePositionSnapshot,
     StageRecorder,
 )
+from ..microscope.stage_moves import StageMoveShortfall, StageTarget
 from ..pre_start_checks import (
     PreStartCheck,
     gather_snapshot,
     run_pre_start_checks,
     to_dialog_items,
 )
+from ..pre_start_checks.checks import (
+    HolderPositionsCheck,
+)
 from ..settings.settings_controller import SettingsController
 from ..stage_positions.controller import StagePositionsController
-from .runner import FetchOutcome, PreStartValidationResult, WorkflowRunner
+from ..stage_positions.positions_model import SavedStagePosition
+from ..status_text import SEE_LOG, exception_detail
+from .runner import (
+    STAGE_CAPTURE_FAILED_WARNING,
+    STAGE_RESTORE_FAILED_WARNING,
+    FetchOutcome,
+    PreStartValidationResult,
+    WorkflowRunner,
+    build_abandon_predicate,
+    build_stage_restore_record,
+)
 from .settings_snapshot import WorkflowSettingsSnapshot
 
 logger = logging.getLogger(__name__)
+
+
+#: Final-status warning when the end-of-run holder selection failed.
+HOLDER_RESTORE_FAILED_WARNING = f"holder not restored {SEE_LOG}"
+
+
+def _build_holder_restore_record(
+    exc: BaseException,
+    *,
+    target: str,
+    duration_s: float,
+) -> dict:
+    """Synthetic session-log record for a failed end-of-run holder select.
+
+    Same key contract as :func:`build_stage_restore_record`.
+    """
+    return {
+        "activity_id": "holder_restore",
+        "result": ActivityResult.EXCEPTION.value,
+        "duration_s": duration_s,
+        "last_status": HOLDER_RESTORE_FAILED_WARNING,
+        "params": {
+            "holder": target,
+            "error": exception_detail(exc),
+        },
+    }
 
 
 class CPWorkflow(WorkflowRunner):
@@ -120,6 +169,15 @@ class CPWorkflow(WorkflowRunner):
         # lifecycle.
         self._settings_snapshot: Optional[WorkflowSettingsSnapshot] = None
 
+        # Start holder. ``_start_holder`` is read by every Start
+        # validation (stage 3, :meth:`_validate_holders`) and feeds the
+        # holder pre-start check; :meth:`_on_commit_to_run` freezes it
+        # into ``_run_start_holder``, which the GIS Deposition builder
+        # (untagged positions) and the end-of-run holder restore use.
+        # "" = none read (no run has validated yet).
+        self._start_holder: str = ""
+        self._run_start_holder: str = ""
+
         # canStart depends on isRunning (inherited) — re-emit when it
         # transitions so QML's Start-button binding refreshes. Same
         # pattern as RTWorkflow.
@@ -132,7 +190,7 @@ class CPWorkflow(WorkflowRunner):
         """True when Start is meaningful right now.
 
         Conditions:
-            * at least one cryo activity OR home stage is enabled
+            * at least one cryo activity or home stage is enabled
             * the workflow isn't already running
 
         Microscope-connected and other-page-not-running checks are
@@ -208,7 +266,7 @@ class CPWorkflow(WorkflowRunner):
     def _validate_pre_start(self) -> PreStartValidationResult:
         """All-or-nothing validation pass at start.
 
-        Three stages, each refusing the start outright on failure;
+        Four stages, each refusing the start outright on failure;
         cheap GUI-state checks precede hardware reads:
 
         1. :attr:`canStart` guard (defensive — QML disables Start when
@@ -217,7 +275,15 @@ class CPWorkflow(WorkflowRunner):
            failures are collected and emitted via
            :attr:`validationFailed` so the user sees every problem at
            once; returns ``"refused"``.
-        3. Pre-start checks gathered from the enabled activity classes.
+        3. Holders: reads the selected holder (the Start holder) and
+           xT's ``available_values``; every holder the run selects
+           (each GIS Deposition position's holder, Sputter Coat's and
+           Home Stage's) must be listed; otherwise the affected
+           activities are flagged via :attr:`validationFailed` and the
+           result is ``"refused"``.
+        4. Pre-start checks gathered from the enabled activity classes,
+           plus the workflow's holder check (see
+           :meth:`_gather_pre_start_checks`).
            REFUSE → :attr:`preStartCheckRefused` and ``"refused"``;
            ASK_CONFIRM → :attr:`preStartCheckNeedsConfirmation` and
            ``"needs_confirmation"`` with the pending check types;
@@ -231,7 +297,7 @@ class CPWorkflow(WorkflowRunner):
             logger.info(
                 "CPWorkflow: no activities enabled; refusing to start"
             )
-            self.statusUpdated.emit(
+            self._emit_status(
                 "Cannot start: no activities enabled"
             )
             return PreStartValidationResult(outcome="refused")
@@ -259,7 +325,7 @@ class CPWorkflow(WorkflowRunner):
             # Pruning may have emptied the set; if Home Stage isn't enabled
             # either, there's now nothing to run.
             if not self.canStart:
-                self.statusUpdated.emit(
+                self._emit_status(
                     "Cannot start: no activities enabled"
                 )
                 return PreStartValidationResult(outcome="refused")
@@ -282,7 +348,7 @@ class CPWorkflow(WorkflowRunner):
             for instance_id, message in validation_errors:
                 self.validationFailed.emit(instance_id, message)
             count = len(validation_errors)
-            self.statusUpdated.emit(
+            self._emit_status(
                 f"Cannot start: {count} "
                 f"activit{'y' if count == 1 else 'ies'} need attention"
             )
@@ -292,7 +358,13 @@ class CPWorkflow(WorkflowRunner):
             )
             return PreStartValidationResult(outcome="refused")
 
-        # --- Stage 3: pre-start checks ---
+        # --- Stage 3: Start holder and the holders the run selects ---
+        holder_error = self._validate_holders()
+        if holder_error is not None:
+            self._emit_status(holder_error)
+            return PreStartValidationResult(outcome="refused")
+
+        # --- Stage 4: pre-start checks ---
         checks = self._gather_pre_start_checks()
         if checks:
             try:
@@ -307,13 +379,13 @@ class CPWorkflow(WorkflowRunner):
                     "CPWorkflow: pre-start hardware read failed; refusing "
                     "to start"
                 )
-                self.statusUpdated.emit("Cannot start: hardware read failed")
+                self._emit_status("Cannot start: hardware read failed")
                 return PreStartValidationResult(outcome="refused")
 
             if summary.refused:
                 items = to_dialog_items(summary.refused)
                 self.preStartCheckRefused.emit(items)
-                self.statusUpdated.emit("Pre-start check failed")
+                self._emit_status("Pre-start check failed")
                 logger.info(
                     "CPWorkflow: refusing to start "
                     "(%d pre-start check%s failed)",
@@ -342,6 +414,139 @@ class CPWorkflow(WorkflowRunner):
         # here — see the method docstring for the rationale.
         return PreStartValidationResult(outcome="ok")
 
+    # --- Holders --------------------------------------------------------------
+
+    def _enabled_gis_positions(
+        self,
+    ) -> List[Tuple[GISDepositionRecord, SavedStagePosition]]:
+        """``(record, saved position)`` for each enabled GIS Deposition.
+
+        In run order, one entry per enabled activity (a position used
+        twice appears twice); activities whose position no longer
+        resolves are skipped (stage 2 refuses them anyway).
+        """
+        pairs = []
+        for record in self._cryo_activities.model.all_records():
+            if record.instance_id not in self._enabled_instance_ids:
+                continue
+            if not isinstance(record, GISDepositionRecord):
+                continue
+            resolved = self._stage_positions.get_record_by_id(
+                record.position_id
+            )
+            if resolved is not None:
+                pairs.append((record, resolved))
+        return pairs
+
+    def _required_holders(self) -> List[str]:
+        """Holders the run selects, in run order, deduped.
+
+        The holder each enabled GIS Deposition position was saved with
+        (a position with none contributes nothing: it is reached under
+        the Start holder), ``defaults.SPUTTER_COAT_HOLDER`` for an
+        enabled Sputter Coat, and ``defaults.HOME_STAGE_HOLDER`` when
+        Home Stage is enabled.
+        """
+        names: List[str] = []
+
+        def add(name: str) -> None:
+            if name and name not in names:
+                names.append(name)
+
+        for record in self._cryo_activities.model.all_records():
+            if record.instance_id not in self._enabled_instance_ids:
+                continue
+            if isinstance(record, SputterCoatRecord):
+                add(defaults.SPUTTER_COAT_HOLDER)
+            elif isinstance(record, GISDepositionRecord):
+                position = self._stage_positions.get_record_by_id(
+                    record.position_id
+                )
+                if position is not None:
+                    add(position.holder)
+        if self._home_stage_enabled:
+            add(defaults.HOME_STAGE_HOLDER)
+        return names
+
+    def _validate_holders(self) -> Optional[str]:
+        """Read the Start holder; refuse when a holder the run selects is missing.
+
+        Reads the selected holder (stored as ``_start_holder`` for the
+        holder pre-start check and frozen at commit) and xT's
+        ``available_values``; returns the user-facing refusal text, or
+        ``None`` when every holder the run selects is listed (a
+        template from another microscope may name one this one lacks).
+        Whether xT will actually *permit* a listed holder at run time is
+        only knowable by trying — the activity's readback verification
+        covers that.
+        """
+        try:
+            current = self._microscope.stage.holder
+            available = self._microscope.stage.available_holders
+        except Exception:
+            logger.exception(
+                "CPWorkflow: holder read failed; refusing to start"
+            )
+            return "Cannot start: hardware read failed"
+        self._start_holder = str(current)
+        logger.info(
+            "CPWorkflow: holder %r selected at Start; available: %r",
+            current, available,
+        )
+        missing = [n for n in self._required_holders() if n not in available]
+        if missing:
+            # Flag each affected activity like a stage 2 failure so its
+            # row shows what to fix; the bar names the first holder.
+            # Home Stage has no row: the bar and the log cover it.
+            affected: List[str] = []
+            for record, position in self._enabled_gis_positions():
+                if position.holder not in missing:
+                    continue
+                affected.append(position.name)
+                self.validationFailed.emit(
+                    record.instance_id,
+                    f"GIS Deposition position \"{position.name}\" was saved "
+                    f"with the {position.holder} holder, which Microscope "
+                    "Control does not list. Choose another position or "
+                    "update this one.",
+                )
+            if defaults.SPUTTER_COAT_HOLDER in missing:
+                affected.append("Sputter Coat")
+                for record in self._cryo_activities.model.all_records():
+                    if (record.instance_id in self._enabled_instance_ids
+                            and isinstance(record, SputterCoatRecord)):
+                        self.validationFailed.emit(
+                            record.instance_id,
+                            "Sputter Coat selects the "
+                            f"{defaults.SPUTTER_COAT_HOLDER} holder, which "
+                            "Microscope Control does not list.",
+                        )
+            if (self._home_stage_enabled
+                    and defaults.HOME_STAGE_HOLDER in missing):
+                affected.append("Home Stage")
+            logger.warning(
+                "CPWorkflow: refusing to start — holder(s) not available: %r "
+                "(affected: %r)",
+                missing, affected,
+            )
+            return f"Cannot start: holder {missing[0]} not available"
+        return None
+
+    def _holder_check_entries(self) -> List[tuple[str, str]]:
+        """``(position name, holder)`` for GIS positions that ask first.
+
+        Positions saved with a holder in ``HOLDERS_TO_CONFIRM``, in run
+        order, each position once.
+        """
+        entries: List[tuple[str, str]] = []
+        seen: Set[str] = set()
+        for _record, position in self._enabled_gis_positions():
+            if position.name in seen or not needs_confirmation(position.holder):
+                continue
+            seen.add(position.name)
+            entries.append((position.name, position.holder))
+        return entries
+
     def _gather_pre_start_checks(self) -> List[PreStartCheck]:
         """Walk enabled cryo activities + Home Stage, collect their checks.
 
@@ -356,6 +561,14 @@ class CPWorkflow(WorkflowRunner):
         :meth:`_next_pending_activity` — no separate registry class.
         Unknown record types are silently skipped (also mirroring
         the fetch behavior).
+
+        One holder check belongs to the workflow, not to an activity
+        class, so the mid-run re-check never evaluates it (the selected
+        holder changes during a run by design):
+        :class:`HolderPositionsCheck` when any enabled GIS Deposition
+        position was saved with a holder that asks first
+        (``HOLDERS_TO_CONFIRM``) — ASK_CONFIRM listing them, with the
+        Start holder read by :meth:`_validate_holders`.
         """
         checks: List[PreStartCheck] = []
         for record in self._cryo_activities.model.all_records():
@@ -370,6 +583,9 @@ class CPWorkflow(WorkflowRunner):
             # no point logging twice for the same record.
         if self._home_stage_enabled:
             checks.extend(HomeStageService.pre_start_checks())
+        entries = self._holder_check_entries()
+        if entries:
+            checks.append(HolderPositionsCheck(entries, self._start_holder))
         return checks
 
     def _validate_record(self, record) -> Optional[str]:
@@ -410,6 +626,10 @@ class CPWorkflow(WorkflowRunner):
         self._settings_snapshot = WorkflowSettingsSnapshot.from_settings(
             self._settings
         )
+        # The holder read by this Start's validation: GIS Deposition
+        # reaches an untagged position under it, and the run selects it
+        # again at the end.
+        self._run_start_holder = self._start_holder
 
         if self._settings_snapshot.move_stage_to_original:
             self._stage_recorder = StageRecorder(self._microscope.stage)
@@ -524,6 +744,8 @@ class CPWorkflow(WorkflowRunner):
         logged and the snapshot left None (so its restore is skipped),
         without aborting the run.
         """
+        logger.info("CPWorkflow: Start holder %r", self._run_start_holder)
+
         if self._stage_recorder is not None:
             on_status("Capturing stage position...")
             try:
@@ -533,6 +755,10 @@ class CPWorkflow(WorkflowRunner):
                     "CPWorkflow: stage capture failed; proceeding without restore"
                 )
                 self._stage_snapshot = None
+                # Surfaced in the final status text (first warning
+                # wins) so the skipped restore isn't silent.
+                if not self._after_run_warning:
+                    self._after_run_warning = STAGE_CAPTURE_FAILED_WARNING
 
     def _after_run(self, on_status: StatusCallback, completed: bool) -> None:
         """Restore captured state after the activity loop exits.
@@ -544,33 +770,147 @@ class CPWorkflow(WorkflowRunner):
         collision risk; an exception may mean the stage isn't where we
         think it is).
 
-        The restore is best-effort. If the capture failed (snapshot is
-        None), the restore is skipped. All recorder / snapshot /
-        settings-snapshot references are cleared unconditionally at the
-        end so nothing leaks into a subsequent run.
+        The **holder** restore — selecting the Start holder again — is
+        the one cleanup that runs on every exit path: selecting a
+        holder is a software setting that moves nothing, and leaving a
+        holder a GIS Deposition position needed (the standard shuttle
+        holder, say) selected after a failure is the unsafe state — an
+        operator could later move the stage by hand believing the
+        limits of the loaded shuttle were in force. It runs last, after
+        the stage return, which therefore runs under the holder the
+        last activity selected. Only the abandon gesture skips it.
+
+        Both restores are best-effort and independently guarded — one
+        failing doesn't prevent the next. If the capture failed (its
+        snapshot is None), the stage restore is skipped. The stage
+        return is a staged move with arrival checks (see
+        ``microscope/stage_moves.py``); an abandon between its stages
+        leaves the stage where it is and is reported like a skipped
+        restore. All recorder / snapshot / settings-snapshot references
+        are cleared unconditionally at the end so nothing leaks into a
+        subsequent run, regardless of which restores fired.
         """
-        # Stage position — success only.
-        if completed:
+        # Latched Stop-press abandon semantics for all cleanup in this
+        # hook (stage restore and holder restore) — see the helper. A
+        # first Stop press that lands during cleanup after a successful
+        # run abandons it, as does a second press on the stop path.
+        should_abandon = build_abandon_predicate(
+            self._stop_event, self._abandon_event,
+        )
+
+        # Stage position — success only, and never after an abandon:
+        # commanding stage motion right after the user asked to
+        # abandon cleanup would contradict the request (and the same
+        # Stop-safety rationale that skips it on the stop path).
+        if completed and should_abandon():
+            logger.warning(
+                "CPWorkflow: cleanup abandoned; skipping stage-position "
+                "restore"
+            )
+            if not self._after_run_warning:
+                self._after_run_warning = (
+                    "Cleanup abandoned — stage not restored"
+                )
+        elif completed:
             if (self._stage_recorder is not None
                     and self._stage_snapshot is not None):
                 on_status("Returning stage to original position...")
+                t0_stage = time.monotonic()
                 try:
-                    self._stage_recorder.restore(self._stage_snapshot)
-                except Exception:
+                    arrived = self._stage_recorder.restore(
+                        self._stage_snapshot,
+                        staged=self._settings_snapshot.zero_tilt_before_stage_moves,
+                        should_abandon=should_abandon,
+                        on_status=on_status,
+                    )
+                except Exception as exc:
                     logger.exception(
                         "CPWorkflow: stage restore failed; stage may not be "
                         "at its original position"
                     )
+                    if isinstance(exc, StageMoveShortfall):
+                        # The return runs under the holder the last
+                        # activity selected; the original position was
+                        # captured under the Start holder. Log both.
+                        try:
+                            holder_now = self._microscope.stage.holder
+                        except Exception:
+                            holder_now = "unknown"
+                        logger.warning(
+                            "CPWorkflow: the stage return ran under holder "
+                            "%r; the original position was captured under %r",
+                            holder_now, self._run_start_holder,
+                        )
+                    # Surfaced in the final bar text (first warning
+                    # wins) and recorded in the session log.
+                    if not self._after_run_warning:
+                        self._after_run_warning = STAGE_RESTORE_FAILED_WARNING
+                    self._after_run_records.append(
+                        build_stage_restore_record(
+                            exc, self._stage_snapshot,
+                            duration_s=time.monotonic() - t0_stage,
+                        )
+                    )
+                else:
+                    if not arrived:
+                        # Abandon between stages: the move stopped where
+                        # it was, which the final status must say.
+                        logger.warning(
+                            "CPWorkflow: stage restore abandoned between "
+                            "stages; stage not at its original position"
+                        )
+                        if not self._after_run_warning:
+                            self._after_run_warning = (
+                                "Cleanup abandoned — stage not restored"
+                            )
         elif self._stage_recorder is not None:
             logger.info(
                 "CPWorkflow: skipping stage restore (run did not complete "
                 "successfully)"
             )
 
+        # Holder — every exit path (see the docstring): the Start holder
+        # again. Skipped only by the abandon gesture, which is surfaced
+        # like the stage case. A no-op (no status) when it is still
+        # selected.
+        target_holder = self._run_start_holder
+        if target_holder:
+            if should_abandon():
+                logger.warning(
+                    "CPWorkflow: cleanup abandoned; skipping holder restore"
+                )
+                if not self._after_run_warning:
+                    self._after_run_warning = (
+                        "Cleanup abandoned — holder not restored"
+                    )
+            else:
+                t0_holder = time.monotonic()
+                try:
+                    select_holder(
+                        self._microscope.stage, target_holder,
+                        should_abort=should_abandon,
+                        on_status=on_status,
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "CPWorkflow: holder restore failed; holder may not "
+                        "be %r", target_holder,
+                    )
+                    if not self._after_run_warning:
+                        self._after_run_warning = HOLDER_RESTORE_FAILED_WARNING
+                    self._after_run_records.append(
+                        _build_holder_restore_record(
+                            exc,
+                            target=target_holder,
+                            duration_s=time.monotonic() - t0_holder,
+                        )
+                    )
+
         # Drop all references — next run creates fresh ones.
         self._stage_snapshot = None
         self._stage_recorder = None
         self._settings_snapshot = None
+        self._run_start_holder = ""
 
     # --- Activity builders -------------------------------------------------
 
@@ -580,7 +920,11 @@ class CPWorkflow(WorkflowRunner):
         """Construct a SputterCoatService from a record.
 
         The Aquilos 2 magnetron coater is driven by the sputter, vacuum,
-        and stage ops — it does not touch the ion beam.
+        and stage ops — it does not touch the ion beam. The coater runs
+        under ``defaults.SPUTTER_COAT_HOLDER`` (listed by Microscope
+        Control, or Start was refused): the activity tilts the stage
+        flat and selects that holder before handing the stage to the
+        coater routine.
         """
         return SputterCoatService(
             sputter_ops=self._microscope.sputter_coater,
@@ -591,6 +935,7 @@ class CPWorkflow(WorkflowRunner):
             duration_s=record.duration_s,
             chamber_recovery_s=record.chamber_recovery_s,
             instance_id=record.instance_id,
+            required_holder=defaults.SPUTTER_COAT_HOLDER,
         )
 
     def _build_gis_deposition(
@@ -601,38 +946,33 @@ class CPWorkflow(WorkflowRunner):
         """Construct a GISDepositionService from a record + resolved position.
 
         ``resolved_position`` is the :class:`SavedStagePosition` looked
-        up from :class:`StagePositionsController` by id. We use its
-        coordinates to construct the AutoScript-shape position object
-        passed to the activity.
+        up from :class:`StagePositionsController` by id. Its five axes
+        become the :class:`StageTarget` the activity moves to, and the
+        holder it was saved with is selected first; a position with no
+        recorded holder is reached under the Start holder.
         """
-        target_position = self._microscope.stage.make_position(
-            x=resolved_position.x,
-            y=resolved_position.y,
-            z=resolved_position.z,
-            r=resolved_position.r,
-            t=resolved_position.t,
-        )
         return GISDepositionService(
             gis_ops=self._microscope.gis,
             stage_ops=self._microscope.stage,
             gis_port_name=self._settings_snapshot.gis_gas_port_name,
-            target_position=target_position,
+            target_position=StageTarget.from_position(resolved_position),
             position_name=resolved_position.name,
             duration_s=record.duration_s,
             chamber_recovery_s=record.chamber_recovery_s,
-            zero_tilt_first=(
-                self._settings_snapshot.zero_tilt_before_gis_deposition
-            ),
+            staged=self._settings_snapshot.zero_tilt_before_stage_moves,
             instance_id=record.instance_id,
+            required_holder=resolved_position.holder or self._run_start_holder,
         )
 
     def _build_home_stage(self) -> HomeStageService:
         """Construct a HomeStageService for the end-of-workflow home.
 
-        Home Stage takes no parameters; returning the stage to its
-        original position is handled by this runner's
+        Home Stage takes no parameters; it tilts the stage flat and
+        homes under ``defaults.HOME_STAGE_HOLDER``. Returning the stage
+        to its original position is handled by this runner's
         :class:`StageRecorder`, gated on a successful run.
         """
         return HomeStageService(
             stage=self._microscope.stage,
+            required_holder=defaults.HOME_STAGE_HOLDER,
         )

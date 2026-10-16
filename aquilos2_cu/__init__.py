@@ -1,3 +1,3 @@
 """Aquilos 2 Cryo Utilities package."""
 
-__version__ = "3.0.6"
+__version__ = "3.1.0"
